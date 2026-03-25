@@ -1,31 +1,29 @@
 # Schulmanager API
 
-> Selbst gehostetes Backend + Discord-Bot für Schulmanager — mit FastAPI, JWT, SQLite, Prometheus und Discord.py.
+> Selbst gehostetes REST-Backend für Schulmanager — mit FastAPI, JWT, SQLite, Webhooks und Prometheus.
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi)
-![Discord.py](https://img.shields.io/badge/discord.py-2.x-5865F2?logo=discord)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)
 ![License](https://img.shields.io/badge/Lizenz-MIT-green)
 
 ---
 
-## Features
-
-- **FastAPI-Backend** mit Swagger-Dokumentation unter `/docs`
-- **JWT-Authentifizierung** (Access-Token, Refresh-Token, Token-Rotation, Rollen: `parent`, `viewer`, `admin`)
-- **Datenabruf pro Schüler**: Stundenplan, Hausaufgaben, Klausuren, Noten + Statistiken, Termine, Fehlzeiten, Nachrichten, ICS-Kalenderexport
-- **Provider-System**: `mock` (Testdaten) und `selenium` (echter Login-Flow)
-- **Persistentes Caching** (SQLite oder In-Memory, TTL pro Endpoint)
-- **Webhook-Subsystem** für Echtzeit-Benachrichtigungen (homework.new, grade.new, absences.new, message.new, schedule.change)
-- **Prometheus-Metriken** unter `/metrics`
-- **Discord-Bot** mit privaten Kanälen pro Nutzer, automatischem Sync, Hausaufgaben-Reaktionen (✅), Erinnerungen und Tages-Digest
+> **Discord-Bot:** Du willst die API direkt über Discord nutzen?
+> Schau dir den zugehörigen Bot an: **[schulmanager-discord-bot →](https://github.com/leoapplecool/schulmanager-discord-bot)**
 
 ---
 
-## Screenshots / Demo
+## Features
 
-> _Platzhalter – Screenshots hier einfügen._
+- **FastAPI-Backend** mit interaktiver Swagger-Dokumentation unter `/docs`
+- **JWT-Authentifizierung** (Access-Token, Refresh-Token, Token-Rotation, Rollen: `parent`, `viewer`, `admin`)
+- **Datenabruf pro Schüler**: Stundenplan, Hausaufgaben, Klausuren, Noten + Statistiken, Termine, Fehlzeiten, Nachrichten, ICS-Kalenderexport
+- **Provider-System**: `mock` (Testdaten ohne Schulmanager-Login) und `selenium` (echter Login-Flow via Browser-Automatisierung)
+- **Persistentes Caching** (SQLite oder In-Memory, konfigurierbares TTL pro Endpoint)
+- **Webhook-Subsystem** für Echtzeit-Benachrichtigungen bei Datenänderungen
+- **Rate-Limiting** (120 Req/min, konfigurierbar)
+- **Prometheus-Metriken** unter `/metrics`
 
 ---
 
@@ -34,67 +32,58 @@
 ### Docker (empfohlen)
 
 ```bash
-# 1. Repository klonen
-git clone https://github.com/dein-user/schulmanager-api.git
+git clone https://github.com/leoapplecool/schulmanager-api.git
 cd schulmanager-api
 
-# 2. Umgebungsvariablen konfigurieren
 cp .env.example .env
-# .env öffnen und SM_JWT_SECRET, SM_DISCORD_BOT_TOKEN etc. setzen
+# .env öffnen und mindestens SM_JWT_SECRET setzen
 
-# 3. Starten
 docker compose up --build
 ```
 
-Oder mit dem mitgelieferten Skript:
-
-```bash
-./start.sh          # Linux/Mac
-start.bat           # Windows
-```
+Die API ist danach erreichbar unter:
+- **Swagger Docs:** `http://localhost:8000/docs`
+- **Health Check:** `http://localhost:8000/health`
+- **Metriken:** `http://localhost:8000/metrics`
 
 ### Lokale Entwicklung
 
 ```bash
-# Abhängigkeiten installieren
 pip install -e ".[dev]"
-
-# API starten
 uvicorn schulmanager_api.main:app --reload --host 127.0.0.1 --port 8000
-
-# Discord-Bot starten (separates Terminal)
-python -m schulmanager_api.discord_bot
 ```
 
 ---
 
 ## Umgebungsvariablen
 
-| Variable | Beschreibung | Beispiel |
+| Variable | Beschreibung | Standard |
 |---|---|---|
-| `SM_JWT_SECRET` | Geheimschlüssel für JWT-Signierung | `mein-geheimes-passwort` |
-| `SM_DISCORD_BOT_TOKEN` | Discord-Bot-Token | `MTI3...` |
-| `SM_DISCORD_API_BASE_URL` | URL der eigenen API-Instanz | `http://api:8000` |
-| `SM_DISCORD_GUILD_ID` | Discord-Server-ID (optional, für schnelleres Sync) | `123456789` |
-| `SM_DISCORD_TIMEZONE` | Zeitzone für Anzeigen | `Europe/Berlin` |
-| `SM_DISCORD_SYNC_INTERVAL_SECONDS` | Sync-Intervall in Sekunden | `300` |
-| `SM_DISCORD_DIGEST_ENABLED` | Tages-Digest aktivieren | `true` |
-| `SM_DISCORD_DIGEST_TIME` | Uhrzeit für Digest (HH:MM) | `07:00` |
-| `SM_DISCORD_CATEGORY_PREFIX` | Präfix für private Kategorien | `sm` |
-| `SM_PROVIDER` | Datenprovider (`mock` oder `selenium`) | `mock` |
-| `SM_DB_PATH` | Pfad zur SQLite-Datenbank | `data/db.sqlite` |
-| `SM_DISCORD_DB_PATH` | Pfad zur Discord-Bot-Datenbank | `data/discord.sqlite` |
+| `SM_BACKEND` | Datenprovider: `mock` oder `selenium` | `mock` |
+| `SM_JWT_SECRET` | Geheimschlüssel für JWT-Signierung | *(muss gesetzt werden)* |
+| `SM_ACCESS_TOKEN_TTL_MINUTES` | Gültigkeit des Access-Tokens in Minuten | `30` |
+| `SM_REFRESH_TOKEN_TTL_DAYS` | Gültigkeit des Refresh-Tokens in Tagen | `14` |
+| `SM_ADMIN_EMAILS_CSV` | Komma-getrennte Admin-E-Mail-Adressen | *(leer)* |
+| `SM_CACHE_ENABLED` | Caching aktivieren | `true` |
+| `SM_CACHE_BACKEND` | Cache-Backend: `sqlite` oder `memory` | `sqlite` |
+| `SM_RATE_LIMIT_ENABLED` | Rate-Limiting aktivieren | `true` |
+| `SM_RATE_LIMIT_REQUESTS` | Max. Anfragen pro Zeitfenster | `120` |
+| `SM_RATE_LIMIT_WINDOW_SECONDS` | Zeitfenster in Sekunden | `60` |
+| `SM_WEBHOOKS_ENABLED` | Webhook-Subsystem aktivieren | `true` |
+| `SM_WEBHOOK_HMAC_SECRET` | HMAC-Geheimnis für Webhook-Signaturen | *(muss gesetzt werden)* |
+| `SM_METRICS_REQUIRE_AUTH` | `/metrics` hinter JWT schützen | `false` |
+| `SM_LOG_LEVEL` | Log-Level (`INFO`, `DEBUG`, ...) | `INFO` |
 
-Eine vollständige Liste befindet sich in `.env.example`.
+Vollständige Liste: `.env.example`
 
 ---
 
-## API-Übersicht
+## API-Endpunkte
 
 | Methode | Endpunkt | Beschreibung |
 |---|---|---|
 | `GET` | `/health` | Health-Check |
-| `POST` | `/auth/login` | Login, gibt Access- und Refresh-Token zurück |
+| `POST` | `/auth/login` | Login → Access- + Refresh-Token |
 | `POST` | `/auth/refresh` | Access-Token erneuern |
 | `POST` | `/auth/logout` | Session invalidieren |
 | `GET` | `/auth/me` | Eigene Account-Infos |
@@ -114,65 +103,19 @@ Eine vollständige Liste befindet sich in `.env.example`.
 | `DELETE` | `/webhooks/{id}` | Webhook löschen |
 | `POST` | `/webhooks/test` | Test-Event an Webhook senden |
 | `POST` | `/sync/refresh` | Manuelles Komplett-Sync |
-| `GET` | `/cache/stats` | Cache-Statistiken (Admin) |
-| `DELETE` | `/cache` | Cache leeren (Admin) |
+| `GET` | `/cache/stats` | Cache-Statistiken *(Admin)* |
+| `DELETE` | `/cache` | Cache leeren *(Admin)* |
 | `GET` | `/metrics` | Prometheus-Metriken |
 
-Vollständige Dokumentation: `http://localhost:8000/docs`
-
----
-
-## Discord-Bot — Slash-Befehle
-
-| Befehl | Beschreibung |
-|---|---|
-| `/login email password [student_id]` | Schulmanager-Login und private Kanäle erstellen |
-| `/logout [delete_category]` | Bot-Zugang entfernen |
-| `/sync` | Manuelle Synchronisierung |
-| `/status` | Bot-Status für den eigenen Account |
-| `/calendar` | ICS-Kalender als DM senden |
-| `/digest` | Tages-Digest sofort anzeigen |
-| `/info` | Allgemeine Bot-Informationen |
-| `/channels` | Eigene Schulmanager-Kanäle anzeigen |
-| `/remind exams <hours>` | Prüfungs-Erinnerung X Stunden vorher |
-| `/remind homework <hours>` | Hausaufgaben-Erinnerung X Stunden vorher |
-| `/remind off <type>` | Erinnerung deaktivieren |
-| `/notify schedule-changes <on/off>` | DM bei Stundenplan-Änderungen |
-| `/notify digest <on/off>` | Tages-Digest aktivieren/deaktivieren |
-| `/notify status` | Benachrichtigungs-Einstellungen anzeigen |
-| `/debug-state` | Debug-Infos für den eigenen Account |
-| `/debug-webhook` | Test-Nachricht in den Webhook-Kanal |
-| `/admin-users` | Alle Bot-Nutzer im Server _(Admin)_ |
-| `/admin-sync-all` | Sync für alle aktiven Nutzer _(Admin)_ |
-| `/admin-user-active` | Nutzer aktiv/inaktiv setzen _(Admin)_ |
-| `/admin-errors` | Letzte Sync-Fehler aller Nutzer _(Admin)_ |
-| `/admin-stats` | Bot-Statistiken _(Admin)_ |
-| `/admin-purge` | Nutzer-Workspace vollständig löschen _(Admin)_ |
-| `/admin-flush-cache` | API-Cache leeren _(Admin)_ |
-
----
-
-## Discord-Kanal-Layout
-
-Pro Nutzer wird automatisch eine private Kategorie mit folgenden Kanälen erstellt:
-
-| Kanal | Inhalt |
-|---|---|
-| `00-status` | Sync-Status-Embed + Tages-Digest + 🔄-Sync-Button |
-| `01-schedule-feed` | Nächste Stunden (automatisch aktualisiert) |
-| `02-schedule-week` | Wochenübersicht (ein Embed pro Tag) |
-| `03-homework` | Eine Nachricht pro Hausaufgabe + ✅-Reaktion zum Abhaken |
-| `04-grades` | Noten je Fach + Notenstatistik |
-| `05-events` | Schultermine + „Nächstes Event"-Panel |
-| `06-webhooks` | Änderungslog nach jedem Sync |
-| `07-absences` | Fehlzeiten-Übersicht |
-| `08-messages` | Schulnachrichten / Posteingang |
+Interaktive Dokumentation mit Try-it-out: `http://localhost:8000/docs`
 
 ---
 
 ## Webhook-Events
 
-| Event | Beschreibung |
+Der Webhook-Dispatcher sendet bei folgenden Ereignissen HTTP POST-Requests an registrierte URLs:
+
+| Event | Auslöser |
 |---|---|
 | `homework.new` | Neue Hausaufgabe erkannt |
 | `grade.new` | Neue Note eingetragen |
@@ -180,53 +123,57 @@ Pro Nutzer wird automatisch eine private Kategorie mit folgenden Kanälen erstel
 | `message.new` | Neue Schulnachricht |
 | `schedule.change` | Stundenplan-Änderung (Ausfall, Vertretung, Raumwechsel) |
 
+Alle Requests werden mit einem HMAC-SHA256-Header (`X-Signature`) signiert (`SM_WEBHOOK_HMAC_SECRET`).
+
 ---
 
 ## Architektur
 
 ```
-schulmanager_api/
-├── main.py              # FastAPI-App, Router-Registrierung
-├── config.py            # Settings via pydantic-settings
-├── auth.py              # JWT-Logik, Token-Rotation
-├── cache.py             # SQLite/In-Memory-Cache mit TTL
-├── webhooks.py          # Webhook-Registrierung und Event-Dispatch
+src/schulmanager_api/
+├── main.py              # FastAPI-App, Router-Registrierung, Middleware
+├── config.py            # Settings via pydantic-settings (SM_ prefix, .env)
+├── dependencies.py      # Dependency Injection (Auth, Provider, Cache)
+├── models/
+│   └── schemas.py       # Pydantic-Modelle für alle Requests & Responses
 ├── providers/
-│   ├── mock.py          # Testdaten-Provider
-│   └── selenium_provider.py  # Echter Schulmanager-Login via Selenium
-├── routers/             # FastAPI-Router (students, auth, webhooks, ...)
-└── discord_bot/
-    ├── bot.py           # Discord-Cog, Slash-Befehle, Sync-Loop
-    ├── embeds.py        # Embed-Rendering, Fingerprinting, Deduplication
-    ├── api_client.py    # HTTP-Client für die eigene API
-    ├── storage.py       # SQLite-Persistenz für Bot-Zustand
-    └── models.py        # Datenmodelle (UserWorkspaceState, ReminderRule, ...)
+│   ├── base.py          # Abstrakte Provider-Schnittstelle
+│   ├── mock.py          # Statische Testdaten (kein Login nötig)
+│   ├── selenium.py      # Echter Schulmanager-Login via Selenium
+│   └── factory.py       # Wählt Provider anhand SM_BACKEND
+├── routers/
+│   ├── auth.py          # Login, Refresh, Logout, /me
+│   ├── students.py      # Alle Schülerdaten-Endpunkte
+│   ├── webhooks.py      # Webhook-Registrierung & Dispatch
+│   ├── sync.py          # Manueller Sync-Trigger
+│   ├── cache.py         # Cache-Stats & Clear (Admin)
+│   ├── health.py        # Health Check
+│   └── metrics.py       # Prometheus-Export
+└── services/
+    ├── security.py      # JWT-Generierung & Validierung
+    ├── auth_store.py    # Session-Persistenz (SQLite)
+    ├── cache.py         # Cache-Abstraktion & TTL-Logik
+    ├── sqlite_cache.py  # SQLite-Cache-Implementierung
+    ├── webhooks.py      # Webhook-Event-Publishing (async)
+    ├── grade_stats.py   # Notenstatistik & Trend-Berechnung
+    ├── ical.py          # ICS-Kalenderexport-Generierung
+    ├── rate_limiter.py  # Rate-Limiting-Middleware
+    └── metrics_store.py # Prometheus-Counter & Histogramme
 ```
 
-**Tech-Stack:** Python 3.11+, FastAPI, JWT, SQLite, Prometheus, discord.py 2.x, Selenium (optional), Docker Compose
+**Tech-Stack:** Python 3.11+, FastAPI, PyJWT, SQLite, aiosqlite, Prometheus, Selenium (optional), Docker Compose
 
 ---
 
-## Entwicklung & Tests
+## Tests
 
 ```bash
-# Abhängigkeiten installieren
 pip install -e ".[dev]"
-
-# Tests ausführen
 pytest
-
-# Linting
-ruff check src/ tests/
-
-# Mit Makefile
-make test
-make lint
-make install
 ```
 
 ---
 
 ## Lizenz
 
-MIT — siehe `LICENSE`.
+MIT

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "schulmanager-api"
+version = "0.1.0"
+description = "Erweiterbare Schulmanager API in Python (ohne HACS)"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "Leo" }
+]
+dependencies = [
+  "fastapi>=0.115.0,<1.0.0",
+  "uvicorn[standard]>=0.30.0,<1.0.0",
+  "pydantic>=2.7.0,<3.0.0",
+  "pydantic-settings>=2.3.0,<3.0.0",
+  "httpx>=0.27.0,<1.0.0",
+  "PyJWT>=2.9.0,<3.0.0",
+  "selenium>=4.22.0,<5.0.0",
+  "aiosqlite>=0.20.0,<1.0.0",
+  "tzdata>=2024.1,<2027.0",
+  "prometheus-client>=0.21.0,<1.0.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0,<9.0.0",
+  "httpx>=0.27.0,<1.0.0"
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

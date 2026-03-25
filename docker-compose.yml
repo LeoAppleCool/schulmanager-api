@@ -1,0 +1,20 @@
+services:
+  api:
+    build:
+      context: .
+      target: api
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - api-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  api-data:

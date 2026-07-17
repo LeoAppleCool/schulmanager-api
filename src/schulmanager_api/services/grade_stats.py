@@ -32,19 +32,31 @@ def _trend(values: list[float]) -> str:
     return "stable"
 
 
+def _weight(item: GradeItem) -> float:
+    """Positive per-grade weight; defaults to 1.0 when missing or non-positive."""
+    w = item.weight
+    if w is None or w <= 0:
+        return 1.0
+    return w
+
+
 def compute_grade_stats(grades: list[GradeItem]) -> GradeStats:
     by_subject: dict[str, list[GradeItem]] = {}
     for item in grades:
         by_subject.setdefault(item.subject, []).append(item)
 
     subject_stats: list[SubjectStats] = []
+    # (weighted-average, total-weight) per subject, for a globally weighted overall GPA.
+    subject_weighted: list[tuple[float, float]] = []
     for subject, items in sorted(by_subject.items()):
         # Sort by date for trend computation
         dated = sorted(items, key=lambda g: g.date.isoformat() if g.date else "")
-        values = [v for item in dated if (v := _grade_value(item.grade)) is not None]
-        if not values:
+        pairs = [(v, _weight(item)) for item in dated if (v := _grade_value(item.grade)) is not None]
+        if not pairs:
             continue
-        avg = sum(values) / len(values)
+        values = [v for v, _ in pairs]
+        total_weight = sum(w for _, w in pairs)
+        avg = sum(v * w for v, w in pairs) / total_weight
         subject_stats.append(
             SubjectStats(
                 subject=subject,
@@ -54,11 +66,15 @@ def compute_grade_stats(grades: list[GradeItem]) -> GradeStats:
                 grade_values=values,
             )
         )
+        subject_weighted.append((avg, total_weight))
 
     if not subject_stats:
         return GradeStats(subjects=[], overall_gpa=None, best_subject=None, worst_subject=None)
 
-    overall_gpa = round(sum(s.average for s in subject_stats) / len(subject_stats), 2)
+    # Overall GPA weighted by each subject's total grade weight (a subject with more/heavier
+    # grades counts more), instead of a naive mean-of-means.
+    total_w = sum(w for _, w in subject_weighted)
+    overall_gpa = round(sum(a * w for a, w in subject_weighted) / total_w, 2)
     best = min(subject_stats, key=lambda s: s.average).subject
     worst = max(subject_stats, key=lambda s: s.average).subject
 

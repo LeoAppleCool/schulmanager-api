@@ -13,10 +13,13 @@ from schulmanager_api.models.schemas import (
     HomeworkItem,
     Lesson,
     LessonChangeType,
+    LetterItem,
     LoginContext,
     MessageItem,
+    MessageThread,
     ScheduleDay,
     Student,
+    ThreadMessage,
 )
 
 
@@ -180,6 +183,7 @@ class MockSchulmanagerProvider:
                 body_preview="Liebe Eltern, bitte denken Sie daran, die Einverstaendniserklaerung...",
                 date=now - timedelta(days=2),
                 read=False,
+                unread_count=1,
             ),
             MessageItem(
                 id="msg_002",
@@ -188,8 +192,61 @@ class MockSchulmanagerProvider:
                 body_preview="Sehr geehrte Eltern, hiermit moechten wir Sie ueber die Termine...",
                 date=now - timedelta(days=7),
                 read=True,
+                unread_count=0,
             ),
         ]
+
+    async def get_message_thread(
+        self, context: LoginContext, student_id: str, subscription_id: str
+    ) -> MessageThread:
+        self._ensure_student(context, student_id)
+        now = datetime.now(timezone.utc)
+        return MessageThread(
+            subscription_id=subscription_id,
+            subject="Ausflug naechste Woche",
+            messages=[
+                ThreadMessage(
+                    id="tmsg_001",
+                    sender="Frau Adler",
+                    text="Liebe Eltern, bitte denken Sie daran, die Einverstaendniserklaerung mitzugeben.",
+                    date=now - timedelta(days=2, hours=3),
+                    has_attachments=True,
+                ),
+                ThreadMessage(
+                    id="tmsg_002",
+                    sender="Max Mustermann (Elternteil)",
+                    text="Vielen Dank fuer die Info, ist erledigt!",
+                    date=now - timedelta(days=2, hours=1),
+                ),
+            ],
+        )
+
+    async def get_letters(self, context: LoginContext, student_id: str) -> list[LetterItem]:
+        self._ensure_student(context, student_id)
+        now = datetime.now(timezone.utc)
+        return [
+            LetterItem(
+                id="letter_001",
+                title="Elternbrief: Klassenfahrt Klasse 10",
+                date=now - timedelta(days=1),
+                read=False,
+                sender="Klassenleitung 10a",
+                requires_confirmation=True,
+                attachment_count=1,
+            ),
+            LetterItem(
+                id="letter_002",
+                title="Infobrief: Neue Mensa-Zeiten",
+                date=now - timedelta(days=9),
+                read=True,
+                sender="Schulleitung",
+                requires_confirmation=False,
+                attachment_count=0,
+            ),
+        ]
+
+    def logout(self, account_id: str) -> None:
+        """No-op for the mock provider (no server-side session)."""
 
     def _ensure_student(self, context: LoginContext, student_id: str) -> None:
         if student_id not in {student.id for student in context.students}:

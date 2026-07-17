@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends
 from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 

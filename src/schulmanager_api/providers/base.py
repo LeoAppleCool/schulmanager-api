@@ -10,8 +10,10 @@ from schulmanager_api.models.schemas import (
     ExamItem,
     GradeItem,
     HomeworkItem,
+    LetterItem,
     LoginContext,
     MessageItem,
+    MessageThread,
     ScheduleDay,
     Student,
 )
@@ -46,3 +48,9 @@ class SchulmanagerProvider(Protocol):
     async def get_absences(self, context: LoginContext, student_id: str) -> list[AbsenceItem]: ...
 
     async def get_messages(self, context: LoginContext, student_id: str) -> list[MessageItem]: ...
+
+    async def get_message_thread(
+        self, context: LoginContext, student_id: str, subscription_id: str
+    ) -> MessageThread: ...
+
+    async def get_letters(self, context: LoginContext, student_id: str) -> list[LetterItem]: ...

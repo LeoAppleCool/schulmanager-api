@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 
 from schulmanager_api.config import get_settings
@@ -16,10 +18,27 @@ settings = get_settings()
 
 setup_logging(settings.log_format, settings.log_level)
 
+
+def _startup_config_warnings() -> None:
+    log = logging.getLogger("schulmanager_api.startup")
+    is_prod = settings.environment.strip().lower() in {"production", "prod"}
+    if not settings.admin_emails:
+        log.warning(
+            "SM_ADMIN_EMAILS_CSV is empty — no account gets the admin role, so /cache/* "
+            "(and /metrics when SM_METRICS_REQUIRE_AUTH=true) will reject everyone."
+        )
+    if settings.jwt_secret == "change-me-in-production":
+        (log.error if is_prod else log.warning)("SM_JWT_SECRET is still the default — set a strong secret.")
+    if settings.webhooks_enabled and settings.webhook_hmac_secret == "change-webhook-secret":
+        (log.error if is_prod else log.warning)("SM_WEBHOOK_HMAC_SECRET is still the default — set a strong secret.")
+
+
+_startup_config_warnings()
+
 app = FastAPI(
     title=settings.app_name,
     description="Modulare API fuer Schulmanager-Daten",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 app.add_middleware(

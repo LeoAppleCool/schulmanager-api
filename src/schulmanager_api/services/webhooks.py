@@ -14,6 +14,7 @@ import httpx
 
 from schulmanager_api.config import Settings
 from schulmanager_api.models.schemas import WebhookEventType, WebhookSubscriptionInfo
+from schulmanager_api.services import metrics_store
 
 
 @dataclass(slots=True)
@@ -93,11 +94,13 @@ class WebhookDispatcher:
                 response = await client.post(subscription.url, content=encoded, headers=headers)
                 if 200 <= response.status_code < 300:
                     self._registry.set_delivery(subscription.id, success=True, error=None)
+                    metrics_store.webhook_deliveries_total.labels(status="success").inc()
                     return True
                 last_error = f"HTTP {response.status_code}"
             except Exception as exc:
                 last_error = str(exc)
         self._registry.set_delivery(subscription.id, success=False, error=last_error)
+        metrics_store.webhook_deliveries_total.labels(status="failure").inc()
         return False
 
     async def dispatch(self, event_type: WebhookEventType, payload: dict[str, Any]) -> int:

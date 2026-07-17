@@ -121,6 +121,32 @@ class MessageItem(BaseModel):
     body_preview: str
     date: datetime
     read: bool = False
+    unread_count: int = 0
+
+
+class ThreadMessage(BaseModel):
+    id: str
+    sender: str
+    text: str
+    date: datetime
+    has_attachments: bool = False
+
+
+class MessageThread(BaseModel):
+    subscription_id: str
+    subject: str
+    messages: list[ThreadMessage] = Field(default_factory=list)
+
+
+class LetterItem(BaseModel):
+    """Elternbrief / parent letter (letters/get-letters)."""
+    id: str
+    title: str
+    date: datetime | None = None
+    read: bool = False
+    sender: str | None = None
+    requires_confirmation: bool = False
+    attachment_count: int = 0
 
 
 class LoginContext(BaseModel):
@@ -157,6 +183,7 @@ class WebhookEventType(str, Enum):
     SCHEDULE_CHANGE = "schedule.change"
     ABSENCE_NEW = "absences.new"
     MESSAGE_NEW = "message.new"
+    LETTER_NEW = "letter.new"
     SYNC_COMPLETED = "sync.completed"
     TEST = "test"
 
@@ -185,6 +212,7 @@ class SyncRefreshRequest(BaseModel):
     events: bool = True
     absences: bool = True
     messages: bool = True
+    letters: bool = True
     force_refresh: bool = True
 
 
@@ -197,6 +225,7 @@ class SyncRefreshResult(BaseModel):
     events: int
     absences: int
     messages: int
+    letters: int = 0
     triggered_events: int
 
 

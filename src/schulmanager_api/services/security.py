@@ -175,8 +175,11 @@ class JWTAuthService:
         return self._store.revoke_account(account_id)
 
     def decide_role(self, email: str) -> Role:
-        if email.strip().lower() in self._settings.admin_emails:
+        normalized = email.strip().lower()
+        if normalized in self._settings.admin_emails:
             return Role.ADMIN
+        if normalized in self._settings.viewer_emails:
+            return Role.VIEWER
         return Role.PARENT
 
     def _decode_token(self, token: str, expected_type: str) -> dict[str, Any]:

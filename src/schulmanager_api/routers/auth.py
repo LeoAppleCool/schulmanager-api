@@ -50,8 +50,13 @@ async def refresh(
 async def logout(
     principal: AuthPrincipal = Depends(get_current_principal),
     auth_service: JWTAuthService = Depends(get_auth_service),
+    provider: SchulmanagerProvider = Depends(get_provider),
 ) -> Response:
     auth_service.revoke_account(principal.account_id)
+    # Also drop the provider-side Schulmanager session so the live token isn't kept around.
+    logout_fn = getattr(provider, "logout", None)
+    if callable(logout_fn):
+        logout_fn(principal.account_id)
     return Response(status_code=204)
 
 

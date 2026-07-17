@@ -8,6 +8,7 @@ from schulmanager_api.config import Settings, get_settings
 from schulmanager_api.dependencies import get_cache_store, get_event_service, get_provider, require_roles
 from schulmanager_api.models.schemas import Role, SyncRefreshRequest, SyncRefreshResult
 from schulmanager_api.providers.base import SchulmanagerProvider
+from schulmanager_api.services import metrics_store
 from schulmanager_api.services.event_service import EventService
 from schulmanager_api.services.security import AuthPrincipal
 
@@ -23,6 +24,21 @@ async def refresh_all(
     event_service: EventService = Depends(get_event_service),
     settings: Settings = Depends(get_settings),
 ) -> SyncRefreshResult:
+    try:
+        return await _run_sync(payload, principal, provider, cache, event_service, settings)
+    except Exception:
+        metrics_store.syncs_total.labels(status="error").inc()
+        raise
+
+
+async def _run_sync(
+    payload: SyncRefreshRequest,
+    principal: AuthPrincipal,
+    provider: SchulmanagerProvider,
+    cache: Any,
+    event_service: EventService,
+    settings: Settings,
+) -> SyncRefreshResult:
     schedule_days = 0
     homework_items = 0
     exams_count = 0
@@ -30,6 +46,7 @@ async def refresh_all(
     events_count = 0
     absences_count = 0
     messages_count = 0
+    letters_count = 0
     triggered_events = 0
 
     for student in principal.context.students:
@@ -84,6 +101,13 @@ async def refresh_all(
             if settings.cache_enabled:
                 cache.set(f"{principal.account_id}:{sid}:messages:", message_list, settings.cache_ttl_messages_seconds)
 
+        if payload.letters:
+            letter_list = await provider.get_letters(principal.context, sid)
+            letters_count += len(letter_list)
+            triggered_events += await event_service.publish_letter_events(principal.account_id, sid, letter_list)
+            if settings.cache_enabled:
+                cache.set(f"{principal.account_id}:{sid}:letters:", letter_list, settings.cache_ttl_messages_seconds)
+
     summary = {
         "students_processed": len(principal.context.students),
         "schedule_days": schedule_days,
@@ -93,8 +117,10 @@ async def refresh_all(
         "events": events_count,
         "absences": absences_count,
         "messages": messages_count,
+        "letters": letters_count,
     }
     triggered_events += await event_service.publish_sync_completed(principal.account_id, summary)
+    metrics_store.syncs_total.labels(status="success").inc()
 
     return SyncRefreshResult(
         students_processed=len(principal.context.students),
@@ -105,5 +131,6 @@ async def refresh_all(
         events=events_count,
         absences=absences_count,
         messages=messages_count,
+        letters=letters_count,
         triggered_events=triggered_events,
     )

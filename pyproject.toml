@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "schulmanager-api"
-version = "0.1.0"
+version = "0.3.0"
 description = "Erweiterbare Schulmanager API in Python (ohne HACS)"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client import Counter, Gauge
 
 # HTTP layer
 http_requests_total = Counter(

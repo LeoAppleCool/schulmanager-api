@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import pickle
 import sqlite3
 import time
@@ -78,11 +77,20 @@ class SQLiteTTLCache:
             except Exception:
                 pass
 
+    @staticmethod
+    def _escape_like(text: str) -> str:
+        # Escape LIKE wildcards so '_' / '%' in account/student ids are treated literally.
+        return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
     def delete_prefix(self, prefix: str) -> None:
+        pattern = self._escape_like(prefix) + "%"
         with self._lock:
             try:
                 with self._connect() as conn:
-                    conn.execute("DELETE FROM cache_entries WHERE key LIKE ?", (prefix + "%",))
+                    conn.execute(
+                        "DELETE FROM cache_entries WHERE key LIKE ? ESCAPE '\\'",
+                        (pattern,),
+                    )
                     conn.commit()
             except Exception:
                 pass

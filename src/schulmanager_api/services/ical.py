@@ -1,8 +1,15 @@
 from __future__ import annotations
 
-import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+
+def _resolve_tz(name: str) -> ZoneInfo | timezone:
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return timezone.utc
 
 
 def _escape(value: str) -> str:
@@ -47,7 +54,9 @@ def build_ics(
     events: list[Any],
     *,
     horizon_days: int = 90,
+    tz_name: str = "Europe/Berlin",
 ) -> bytes:
+    local_tz = _resolve_tz(tz_name)
     today = date.today()
     cutoff = today + timedelta(days=horizon_days)
 
@@ -84,8 +93,10 @@ def build_ics(
                 eh, em = map(int, str(lesson.get("end_time", "00:00")).split(":")[:2])
             except (ValueError, AttributeError):
                 continue
-            start_dt = datetime(day_date.year, day_date.month, day_date.day, sh, sm, tzinfo=timezone.utc)
-            end_dt = datetime(day_date.year, day_date.month, day_date.day, eh, em, tzinfo=timezone.utc)
+            # Lesson HH:MM are the school's local wall-clock times; stamp them in the school
+            # timezone so _dt_stamp converts to the correct UTC instant (fixes the DST shift).
+            start_dt = datetime(day_date.year, day_date.month, day_date.day, sh, sm, tzinfo=local_tz)
+            end_dt = datetime(day_date.year, day_date.month, day_date.day, eh, em, tzinfo=local_tz)
             subject = str(lesson.get("subject") or "Fach")
             teacher = str(lesson.get("teacher") or "")
             room = str(lesson.get("room") or "")

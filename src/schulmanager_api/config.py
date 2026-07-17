@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,6 +17,10 @@ class Settings(BaseSettings):
     access_token_ttl_minutes: int = 30
     refresh_token_ttl_days: int = 14
     admin_emails_csv: str = ""
+    viewer_emails_csv: str = ""
+
+    # Timezone the school's wall-clock times (lesson start/end, events) are in.
+    school_timezone: str = "Europe/Berlin"
 
     cache_enabled: bool = True
     cache_backend: str = "sqlite"  # memory | sqlite
@@ -39,7 +45,10 @@ class Settings(BaseSettings):
     selenium_driver_path: str | None = None
     selenium_login_timeout_seconds: int = 25
     selenium_require_browser: bool = False
-    selenium_bundle_version: str = "0000000000"
+    # Schulmanager ignores the bundleVersion *content* (any placeholder works); this is only
+    # a fallback when auto-discovery fails. Must be a non-empty hex-ish string.
+    selenium_bundle_version: str = "42424242424242424242"
+    selenium_bundle_cache_ttl_seconds: int = 3600
     selenium_term_id: int = 28592
 
     discord_bot_token: str | None = None
@@ -58,11 +67,15 @@ class Settings(BaseSettings):
 
     @property
     def admin_emails(self) -> set[str]:
-        return {
-            part.strip().lower()
-            for part in self.admin_emails_csv.split(",")
-            if part.strip()
-        }
+        return self._csv_to_set(self.admin_emails_csv)
+
+    @property
+    def viewer_emails(self) -> set[str]:
+        return self._csv_to_set(self.viewer_emails_csv)
+
+    @staticmethod
+    def _csv_to_set(raw: str) -> set[str]:
+        return {part.strip().lower() for part in raw.split(",") if part.strip()}
 
 
 @lru_cache(maxsize=1)

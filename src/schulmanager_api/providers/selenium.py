@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
+import logging
 import re
+import time
 from threading import Lock
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import HTTPException
@@ -22,17 +25,29 @@ from schulmanager_api.models.schemas import (
     HomeworkItem,
     Lesson,
     LessonChangeType,
+    LetterItem,
     LoginContext,
     MessageItem,
+    MessageThread,
     ScheduleDay,
     Student,
+    ThreadMessage,
 )
+
+logger = logging.getLogger("schulmanager_api.provider")
 
 LOGIN_API_URL = "https://login.schulmanager-online.de/api/login"
 GET_SALT_URL = "https://login.schulmanager-online.de/api/get-salt"
 CALLS_URL = "https://login.schulmanager-online.de/api/calls"
 LOGIN_PAGE_URL = "https://login.schulmanager-online.de/#/login"
 INDEX_URL = "https://login.schulmanager-online.de/"
+
+
+def _school_tz() -> ZoneInfo | timezone:
+    try:
+        return ZoneInfo(get_settings().school_timezone)
+    except (ZoneInfoNotFoundError, ValueError, Exception):  # noqa: BLE001 - fall back to UTC
+        return timezone.utc
 
 
 @dataclass(slots=True)
@@ -47,10 +62,19 @@ class SeleniumAccountSession:
     grade_term_ids: list[int] | None = None
     subjects_by_id: dict[int, str] | None = None
     class_hours_by_key: dict[str, dict[str, Any]] | None = None
+    grades_params: dict[str, Any] | None = None
 
 
 class SeleniumSchulmanagerProvider:
-    """Schulmanager provider with browser-login validation and api/calls data fetches."""
+    """Schulmanager provider: real HTTP login (get-salt + login) and api/calls data fetches.
+
+    The optional Selenium/Chrome step only *double-checks* credentials in a real browser and is
+    off by default (SM_SELENIUM_REQUIRE_BROWSER); the httpx api/login below is the actual auth.
+    """
+
+    # bundleVersion is deploy-global, not per-account. Cache it across logins with a TTL.
+    _bundle_lock = Lock()
+    _bundle_cache: tuple[str, float] | None = None
 
     def __init__(self) -> None:
         self._settings: Settings = get_settings()
@@ -58,14 +82,21 @@ class SeleniumSchulmanagerProvider:
         self._lock = Lock()
 
     async def login(self, credentials: AuthRequest) -> LoginContext:
+        # The browser step is a redundant credential double-check; only run it when explicitly
+        # requested. The api/login call below is the real authentication.
         if self._settings.selenium_require_browser:
-            await asyncio.to_thread(self._verify_login_with_browser, credentials)
-        else:
             try:
                 await asyncio.to_thread(self._verify_login_with_browser, credentials)
-            except Exception:
-                # Optional browser validation failed; API login still continues.
-                pass
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001 - surface infra failure as a clean 502
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Browser-Login-Pruefung fehlgeschlagen (Chrome/Chromedriver verfuegbar? "
+                        f"{type(exc).__name__}). SM_SELENIUM_REQUIRE_BROWSER=false deaktiviert diesen Schritt."
+                    ),
+                ) from exc
 
         login_data = await self._api_login(credentials)
 
@@ -280,13 +311,12 @@ class SeleniumSchulmanagerProvider:
         wide_start = today - timedelta(days=370)
         wide_end = today + timedelta(days=370)
 
-        term_id_candidates: list[int | None] = []
         discovered_term_ids = await self._get_grade_term_ids(session, today)
-        term_id_candidates.extend(discovered_term_ids[:4])
-        configured_term = self._settings.selenium_term_id
-        if configured_term not in term_id_candidates:
-            term_id_candidates.append(configured_term)
-        term_id_candidates.append(None)
+        terms: list[int | None] = list(discovered_term_ids[:2])
+        if self._settings.selenium_term_id not in terms:
+            terms.append(self._settings.selenium_term_id)
+        terms.append(None)
+        primary_term = terms[0]
 
         parameter_candidates: list[dict[str, Any]] = []
         seen_params: set[str] = set()
@@ -313,10 +343,19 @@ class SeleniumSchulmanagerProvider:
             seen_params.add(marker)
             parameter_candidates.append(params)
 
-        for range_start, range_end in ((start, end), (wide_start, wide_end)):
-            for term_id in term_id_candidates:
-                add_params(range_start, range_end, term_id, "entireYear")
-                add_params(range_start, range_end, term_id, None)
+        # 1) The shape that worked last time on this session (usually the only request needed).
+        cached = session.grades_params
+        if isinstance(cached, dict):
+            add_params(start, end, cached.get("termId"), cached.get("gradingPeriodType"))
+
+        # 2) A small, targeted probe set instead of the former ~24-combo cartesian brute force.
+        for term in terms:
+            add_params(start, end, term, "entireYear")
+        add_params(start, end, primary_term, None)
+        add_params(wide_start, wide_end, primary_term, "entireYear")
+
+        # Hard cap to bound worst-case latency (each candidate is one sequential HTTP round-trip).
+        parameter_candidates = parameter_candidates[:6]
 
         fallback_payload: dict[str, Any] | None = None
         subject_map = await self._get_subject_map(session)
@@ -326,6 +365,7 @@ class SeleniumSchulmanagerProvider:
                 "grades",
                 "get-grading-information-for-student",
                 params,
+                soft=True,
             )
             payload = self._coerce_grades_payload(rows)
             if payload is None:
@@ -335,6 +375,10 @@ class SeleniumSchulmanagerProvider:
             payload_for_parse["_subject_map"] = subject_map
             parsed_items = self._parse_grade_items(payload_for_parse)
             if parsed_items:
+                session.grades_params = {
+                    "termId": params.get("termId"),
+                    "gradingPeriodType": params.get("gradingPeriodType"),
+                }
                 return parsed_items
 
             if fallback_payload is None:
@@ -414,6 +458,9 @@ class SeleniumSchulmanagerProvider:
         start = date.today() - timedelta(days=180)
         end = date.today() + timedelta(days=30)
 
+        # NOTE: 'classbook/get-student-absences' is unconfirmed against public clients; if a live
+        # traffic capture reveals the real Fehlzeiten endpoint, wire it in here. soft=True so a
+        # wrong/disabled endpoint degrades to [] instead of failing the request (401 still raises).
         data = await self._api_call(
             session,
             "classbook",
@@ -423,6 +470,7 @@ class SeleniumSchulmanagerProvider:
                 "start": start.isoformat(),
                 "end": end.isoformat(),
             },
+            soft=True,
         )
 
         absences: list[AbsenceItem] = []
@@ -457,54 +505,182 @@ class SeleniumSchulmanagerProvider:
         return absences
 
     async def get_messages(self, context: LoginContext, student_id: str) -> list[MessageItem]:
+        """Messenger inbox: list of chat threads via messenger/get-subscriptions.
+
+        (The old code used a non-existent 'messages'/'get-inbox' endpoint, which always failed.)
+        """
+        session, _ = self._require_student_session(context, student_id)
+
+        data = await self._api_call(session, "messenger", "get-subscriptions", {}, soft=True)
+
+        rows: list[Any]
+        if isinstance(data, list):
+            rows = data
+        elif isinstance(data, dict):
+            rows = data.get("subscriptions") or data.get("data") or []
+        else:
+            rows = []
+
+        messages: list[MessageItem] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            thread = row.get("thread") if isinstance(row.get("thread"), dict) else row
+
+            subscription_id = self._as_text(row.get("id") or thread.get("id") or f"sub_{len(messages)}")
+            subject = self._as_text(thread.get("subject") or thread.get("title") or "(kein Betreff)")
+            sender = self._as_text(
+                thread.get("senderString")
+                or thread.get("sender")
+                or thread.get("recipientString")
+                or "Unbekannt"
+            ) or "Unbekannt"
+
+            msg_dt = self._parse_datetime(
+                thread.get("lastMessageTimestamp")
+                or thread.get("updatedAt")
+                or thread.get("createdAt")
+                or row.get("lastMessageTimestamp")
+            ) or datetime.now(timezone.utc)
+
+            unread = self._opt_int(row.get("unreadCount") or thread.get("unreadCount")) or 0
+            preview = self._opt_text(thread.get("lastMessagePreview") or thread.get("preview")) or ""
+            if preview and len(preview) > 200:
+                preview = preview[:197] + "..."
+
+            messages.append(
+                MessageItem(
+                    id=subscription_id,
+                    sender=sender,
+                    subject=subject,
+                    body_preview=preview,
+                    date=msg_dt,
+                    read=unread == 0,
+                    unread_count=unread,
+                )
+            )
+
+        messages.sort(key=lambda m: m.date, reverse=True)
+        return messages
+
+    async def get_message_thread(
+        self, context: LoginContext, student_id: str, subscription_id: str
+    ) -> MessageThread:
+        """All messages inside one chat thread (messenger/get-messages-by-subscription)."""
         session, _ = self._require_student_session(context, student_id)
 
         data = await self._api_call(
             session,
-            "messages",
-            "get-inbox",
-            {"limit": 50, "offset": 0},
+            "messenger",
+            "get-messages-by-subscription",
+            {"subscriptionId": self._opt_int(subscription_id) or subscription_id},
+            soft=True,
         )
 
-        messages: list[MessageItem] = []
-        rows = data if isinstance(data, list) else (data.get("messages") or data.get("items") or [] if isinstance(data, dict) else [])
+        rows: list[Any]
+        subject = ""
+        if isinstance(data, dict):
+            rows = data.get("messages") or data.get("data") or []
+            subject = self._as_text(data.get("subject") or (data.get("thread") or {}).get("subject") or "")
+        elif isinstance(data, list):
+            rows = data
+        else:
+            rows = []
 
+        thread_messages: list[ThreadMessage] = []
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            msg_dt = self._parse_datetime(
-                row.get("sentAt") or row.get("createdAt") or row.get("date")
-            )
-            if msg_dt is None:
-                msg_dt = datetime.now(timezone.utc)
-
-            sender_raw = row.get("sender") or row.get("from") or row.get("author") or {}
+            sender_raw = row.get("sender") or row.get("author") or {}
             if isinstance(sender_raw, dict):
-                first = str(sender_raw.get("firstName") or "").strip()
-                last = str(sender_raw.get("lastName") or "").strip()
+                first = self._as_text(sender_raw.get("firstname") or sender_raw.get("firstName"))
+                last = self._as_text(sender_raw.get("lastname") or sender_raw.get("lastName"))
                 sender = f"{first} {last}".strip() or "Unbekannt"
             else:
                 sender = self._as_text(sender_raw) or "Unbekannt"
 
-            subject = self._as_text(row.get("subject") or row.get("title") or "(kein Betreff)")
-            body = self._opt_text(row.get("bodyPreview") or row.get("body") or row.get("content") or "")
-            if body and len(body) > 200:
-                body = body[:197] + "..."
-            read = bool(row.get("read") or row.get("isRead") or row.get("seen"))
-            item_id = self._as_text(row.get("id") or f"msg_{student_id}_{len(messages)}")
+            text = self._as_text(row.get("text") or row.get("body") or row.get("content") or "")
+            attachments = row.get("attachments")
+            has_attach = bool(isinstance(attachments, list) and attachments)
+            msg_dt = self._parse_datetime(
+                row.get("createdAt") or row.get("sentAt") or row.get("date")
+            ) or datetime.now(timezone.utc)
 
-            messages.append(
-                MessageItem(
-                    id=item_id,
+            thread_messages.append(
+                ThreadMessage(
+                    id=self._as_text(row.get("id") or f"tmsg_{len(thread_messages)}"),
                     sender=sender,
-                    subject=subject,
-                    body_preview=body or "",
+                    text=text,
                     date=msg_dt,
-                    read=read,
+                    has_attachments=has_attach,
                 )
             )
 
-        return messages
+        thread_messages.sort(key=lambda m: m.date)
+        return MessageThread(subscription_id=self._as_text(subscription_id), subject=subject, messages=thread_messages)
+
+    async def get_letters(self, context: LoginContext, student_id: str) -> list[LetterItem]:
+        """Elternbriefe / parent letters (letters/get-letters)."""
+        session, _ = self._require_student_session(context, student_id)
+        sid = self._opt_int(student_id)
+
+        data = await self._api_call(session, "letters", "get-letters", {}, soft=True)
+
+        rows: list[Any]
+        if isinstance(data, list):
+            rows = data
+        elif isinstance(data, dict):
+            rows = data.get("letters") or data.get("data") or []
+        else:
+            rows = []
+
+        letters: list[LetterItem] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+
+            title = self._as_text(row.get("title") or row.get("subject") or "Elternbrief")
+            sent = self._parse_datetime(row.get("sentDate") or row.get("createdAt") or row.get("date"))
+
+            # Read status is per-student, held in studentStatuses[].
+            read = False
+            statuses = row.get("studentStatuses") or row.get("recipients")
+            if isinstance(statuses, list):
+                for status in statuses:
+                    if not isinstance(status, dict):
+                        continue
+                    status_sid = self._opt_int(status.get("studentId") or status.get("id"))
+                    if sid is not None and status_sid is not None and status_sid != sid:
+                        continue
+                    if status.get("readTimestamp") or status.get("statusRead") or status.get("read"):
+                        read = True
+                        break
+            else:
+                read = bool(row.get("read") or row.get("readTimestamp"))
+
+            attachments = row.get("attachments")
+            attachment_count = len(attachments) if isinstance(attachments, list) else 0
+            requires_confirmation = bool(
+                row.get("requiresConfirmation")
+                or row.get("needsConfirmation")
+                or row.get("hasConfirmationRequest")
+            )
+            sender = self._opt_text(row.get("senderName") or row.get("sender") or row.get("author"))
+
+            letters.append(
+                LetterItem(
+                    id=self._as_text(row.get("id") or f"letter_{len(letters)}"),
+                    title=title,
+                    date=sent,
+                    read=read,
+                    sender=sender,
+                    requires_confirmation=requires_confirmation,
+                    attachment_count=attachment_count,
+                )
+            )
+
+        letters.sort(key=lambda letter: (letter.date is not None, letter.date or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+        return letters
 
     async def _api_login(self, credentials: AuthRequest) -> dict[str, Any]:
         institution_id = credentials.institution_id
@@ -608,16 +784,32 @@ class SeleniumSchulmanagerProvider:
             driver.quit()
 
     async def _discover_bundle_version(self) -> str:
-        dummy = self._settings.selenium_bundle_version
+        # Serve a cached value if still fresh. bundleVersion changes only on Schulmanager
+        # deploys, and its *content* is not validated by the server, so a stale/dummy value is
+        # harmless — this cache just avoids re-scraping big JS bundles on every login.
+        ttl = max(self._settings.selenium_bundle_cache_ttl_seconds, 0)
+        with self._bundle_lock:
+            cached = SeleniumSchulmanagerProvider._bundle_cache
+        if cached is not None and (time.monotonic() - cached[1]) < ttl:
+            return cached[0]
 
+        discovered = await self._scrape_bundle_version()
+        value = discovered or self._settings.selenium_bundle_version
+        if not discovered:
+            logger.info("bundleVersion discovery failed; using fallback placeholder (server ignores it)")
+        with self._bundle_lock:
+            SeleniumSchulmanagerProvider._bundle_cache = (value, time.monotonic())
+        return value
+
+    async def _scrape_bundle_version(self) -> str | None:
         async with httpx.AsyncClient(timeout=15) as client:
             try:
                 response = await client.get(INDEX_URL, headers={"Accept": "text/html"})
                 if response.status_code != 200:
-                    return dummy
+                    return None
                 html = response.text
             except Exception:
-                return dummy
+                return None
 
             scripts = re.findall(r'<script[^>]+src=["\']([^"\']+\.js)["\']', html, re.IGNORECASE)
             scripts += re.findall(
@@ -635,7 +827,8 @@ class SeleniumSchulmanagerProvider:
                 else:
                     normalized.append(INDEX_URL + src.lstrip("./"))
 
-            pattern = re.compile(r'bundleVersion\s*:\s*["\']([a-f0-9]{10})["\']', re.IGNORECASE)
+            # Observed bundleVersion values range from 10 to 20 hex chars — don't hard-code 10.
+            pattern = re.compile(r'bundleVersion["\']?\s*[:=]\s*["\']([a-f0-9]{8,40})["\']', re.IGNORECASE)
             for js_url in normalized:
                 try:
                     js_response = await client.get(js_url)
@@ -647,7 +840,7 @@ class SeleniumSchulmanagerProvider:
                 except Exception:
                     continue
 
-        return dummy
+        return None
 
     async def _api_call(
         self,
@@ -655,7 +848,17 @@ class SeleniumSchulmanagerProvider:
         module_name: str,
         endpoint_name: str,
         parameters: dict[str, Any],
+        *,
+        soft: bool = False,
     ) -> Any:
+        """Call a Schulmanager api/calls endpoint.
+
+        Unlike the old implementation this does NOT collapse errors into an empty list: a real
+        failure (expired token, wrong endpoint) now raises so it is visible instead of looking
+        like "no data". ``soft=True`` is for optional/per-school modules (letters, messenger,
+        absences): a genuine endpoint error degrades to ``[]``, but an expired session (401)
+        still raises so the client can re-authenticate.
+        """
         payload: dict[str, Any] = {
             "requests": [
                 {
@@ -669,26 +872,71 @@ class SeleniumSchulmanagerProvider:
 
         headers = self._json_headers() | {"Authorization": f"Bearer {session.token}"}
 
-        async with httpx.AsyncClient(timeout=25) as client:
-            response = await client.post(CALLS_URL, json=payload, headers=headers)
+        try:
+            async with httpx.AsyncClient(timeout=25) as client:
+                response = await client.post(CALLS_URL, json=payload, headers=headers)
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=504,
+                detail=f"Schulmanager nicht erreichbar ({module_name}/{endpoint_name}): {exc}",
+            ) from exc
 
+        if response.status_code in (401, 403):
+            raise HTTPException(
+                status_code=401,
+                detail="Schulmanager-Sitzung abgelaufen. Bitte neu einloggen.",
+            )
         if response.status_code != 200:
             raise HTTPException(
                 status_code=502,
-                detail=f"Schulmanager api/calls Fehler ({module_name}/{endpoint_name})",
+                detail=f"Schulmanager api/calls HTTP {response.status_code} ({module_name}/{endpoint_name})",
             )
 
-        data = response.json()
-        results = data.get("results")
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Schulmanager lieferte kein JSON ({module_name}/{endpoint_name})",
+            ) from exc
+
+        results = data.get("results") if isinstance(data, dict) else None
         if not isinstance(results, list) or not results:
-            return []
+            if soft:
+                return []
+            raise HTTPException(
+                status_code=502,
+                detail=f"Schulmanager api/calls ohne Ergebnis ({module_name}/{endpoint_name})",
+            )
 
         result = results[0]
         if not isinstance(result, dict):
+            if soft:
+                return []
+            raise HTTPException(
+                status_code=502,
+                detail=f"Unerwartete api/calls Antwort ({module_name}/{endpoint_name})",
+            )
+
+        status = int(result.get("status") or 500)
+        if status == 200:
+            return result.get("data", [])
+
+        # Inner error: an expired/invalid Schulmanager token always means "re-login".
+        if status in (401, 403):
+            raise HTTPException(
+                status_code=401,
+                detail="Schulmanager-Sitzung abgelaufen. Bitte neu einloggen.",
+            )
+
+        detail = self._as_text(result.get("error") or result.get("message") or "")
+        if soft:
+            logger.info("Soft api/calls error %s/%s status=%s %s", module_name, endpoint_name, status, detail)
             return []
-        if int(result.get("status") or 500) != 200:
-            return []
-        return result.get("data", [])
+        raise HTTPException(
+            status_code=502,
+            detail=f"Schulmanager api/calls Fehler ({module_name}/{endpoint_name}): status={status} {detail}".strip(),
+        )
 
     async def _get_grade_term_ids(self, session: SeleniumAccountSession, reference_date: date) -> list[int]:
         if session.grade_term_ids is not None:
@@ -707,7 +955,7 @@ class SeleniumSchulmanagerProvider:
             "uiState": "main.modules.grades.student",
         }
 
-        rows = await self._api_call(session, "grades", "poqa", parameters)
+        rows = await self._api_call(session, "grades", "poqa", parameters, soft=True)
 
         current_ids: list[int] = []
         other_terms: list[tuple[date, int]] = []
@@ -759,7 +1007,7 @@ class SeleniumSchulmanagerProvider:
             "uiState": "main.modules.grades.student",
         }
 
-        rows = await self._api_call(session, "grades", "poqa", parameters)
+        rows = await self._api_call(session, "grades", "poqa", parameters, soft=True)
         subjects: dict[int, str] = {}
         if isinstance(rows, list):
             for row in rows:
@@ -780,7 +1028,7 @@ class SeleniumSchulmanagerProvider:
         if session.class_hours_by_key is not None:
             return session.class_hours_by_key
 
-        rows = await self._api_call(session, "schedules", "get-class-hours", {})
+        rows = await self._api_call(session, "schedules", "get-class-hours", {}, soft=True)
         mapping: dict[str, dict[str, Any]] = {}
         if isinstance(rows, list):
             for row in rows:
@@ -989,11 +1237,19 @@ class SeleniumSchulmanagerProvider:
 
         return self._as_text(event.get("subjectText") or event.get("topic") or "Fach")
 
+    def logout(self, account_id: str) -> None:
+        """Drop the in-memory Schulmanager session (token) for an account."""
+        with self._lock:
+            self._sessions.pop(account_id, None)
+
     def _require_session(self, context: LoginContext) -> SeleniumAccountSession:
         with self._lock:
             session = self._sessions.get(context.account_id)
         if session is None:
-            raise HTTPException(status_code=401, detail="Selenium Session nicht gefunden. Bitte neu einloggen.")
+            raise HTTPException(
+                status_code=401,
+                detail="Schulmanager-Sitzung nicht gefunden (Server-Neustart?). Bitte neu einloggen.",
+            )
         return session
 
     def _require_student_session(self, context: LoginContext, student_id: str) -> tuple[SeleniumAccountSession, dict[str, Any]]:
@@ -1565,7 +1821,9 @@ class SeleniumSchulmanagerProvider:
 
     @staticmethod
     def _pbkdf2_hash_hex(password: str, salt: str) -> str:
-        pw_bytes = password.encode("latin-1", errors="strict")
+        # Schulmanager's web client derives the hash over UTF-8 bytes; latin-1 (the old value)
+        # crashes or mismatches for umlaut/non-ASCII passwords.
+        pw_bytes = password.encode("utf-8")
         salt_bytes = salt.encode("utf-8")
         derived = hashlib.pbkdf2_hmac("sha512", pw_bytes, salt_bytes, 99999, dklen=512)
         return derived.hex()
@@ -1605,10 +1863,12 @@ class SeleniumSchulmanagerProvider:
 
     @staticmethod
     def _parse_datetime(value: Any) -> datetime | None:
+        # Naive (offset-less) Schulmanager timestamps are the school's local wall clock, so
+        # attach the school timezone rather than mislabelling them UTC (which shifts events 1-2h).
         if value is None:
             return None
         if isinstance(value, datetime):
-            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return value if value.tzinfo else value.replace(tzinfo=_school_tz())
 
         text = str(value).strip()
         if not text:
@@ -1619,11 +1879,11 @@ class SeleniumSchulmanagerProvider:
 
         try:
             parsed = datetime.fromisoformat(text)
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=_school_tz())
         except ValueError:
             try:
                 parsed = datetime.strptime(text[:19], "%Y-%m-%dT%H:%M:%S")
-                return parsed.replace(tzinfo=timezone.utc)
+                return parsed.replace(tzinfo=_school_tz())
             except ValueError:
                 return None
 

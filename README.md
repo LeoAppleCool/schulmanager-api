@@ -96,7 +96,9 @@ Vollständige Liste: `.env.example`
 | `GET` | `/students/{id}/grades/stats` | Notenstatistiken mit Trend |
 | `GET` | `/students/{id}/events` | Schultermine |
 | `GET` | `/students/{id}/absences` | Fehlzeiten |
-| `GET` | `/students/{id}/messages` | Nachrichten / Posteingang |
+| `GET` | `/students/{id}/messages` | Nachrichten / Chat-Threads (Messenger) |
+| `GET` | `/students/{id}/messages/{subscription_id}` | Einzelner Nachrichten-Thread |
+| `GET` | `/students/{id}/letters` | Elternbriefe (mit Lesestatus) |
 | `GET` | `/students/{id}/calendar.ics` | ICS-Kalenderexport |
 | `POST` | `/webhooks` | Webhook registrieren |
 | `GET` | `/webhooks` | Eigene Webhooks auflisten |
@@ -121,9 +123,55 @@ Der Webhook-Dispatcher sendet bei folgenden Ereignissen HTTP POST-Requests an re
 | `grade.new` | Neue Note eingetragen |
 | `absences.new` | Neue Fehlzeit eingetragen |
 | `message.new` | Neue Schulnachricht |
+| `letter.new` | Neuer Elternbrief |
 | `schedule.change` | Stundenplan-Änderung (Ausfall, Vertretung, Raumwechsel) |
+| `sync.completed` | `/sync/refresh` abgeschlossen (mit Zusammenfassung) |
+
+> Beim **ersten** Beobachten eines Datentyps (bzw. nach einem Neustart) werden vorhandene Einträge
+> still „grundiert" und lösen **keine** Events aus — es feuern nur echte neue Einträge danach.
 
 Alle Requests werden mit einem HMAC-SHA256-Header (`X-Signature`) signiert (`SM_WEBHOOK_HMAC_SECRET`).
+
+---
+
+## Die echte Schulmanager-API
+
+Der `selenium`-Provider spricht die private Schulmanager-API direkt über HTTP an
+(`POST /api/calls` mit `{moduleName, endpointName, parameters}` und Bearer-JWT). Login läuft über
+`/api/get-salt` + `/api/login` (PBKDF2-HMAC-SHA512, 99999 Iterationen). Bestätigte Endpunkte:
+
+| Feature | `moduleName` / `endpointName` |
+|---|---|
+| Stundenplan | `schedules` / `get-actual-lessons` |
+| Stundenzeiten | `schedules` / `get-class-hours` |
+| Hausaufgaben | `classbook` / `get-homework` |
+| Klausuren | `exams` / `get-exams` |
+| Termine (Kalender) | `exams` / `poqa` (`modules/calendar/event`) |
+| Noten | `grades` / `get-grading-information-for-student` |
+| Nachrichten (Threads) | `messenger` / `get-subscriptions`, `messenger` / `get-messages-by-subscription` |
+| Elternbriefe | `letters` / `get-letters` |
+
+> **Eigenen Account analysieren:** `tools/capture-api.js` in die Browser-Konsole (F12) einfügen und
+> durch die Module klicken — es zeigt `moduleName`/`endpointName`, `parameters` und die Response-**Struktur**
+> (ohne Inhalte, ohne Auth-Token). Ideal, um schul­spezifische Endpunkte zu bestätigen.
+
+### Roadmap – was sich noch scrapen ließe
+
+Read-fähige Module, die (noch) nicht abgedeckt sind, nach Nutzwert:
+
+- **Zahlungen** (offene/bezahlte Posten), **Digitales Klassenbuch** (Bemerkungen, Themen),
+  **Lernen** (Aufgaben/Material), **Krankmeldung** (Historie) — hoher Wert.
+- **Elternsprechtag / Sprechstunden** (Slots + eigene Buchungen), **Umfragen**, **Dokumente**,
+  **Schwarzes Brett**, **Lehrerliste** — mittlerer Wert.
+
+> ⚠️ Welche Module verfügbar sind, hängt von der jeweiligen Schule ab — neue Endpunkte müssen
+> „leer statt Fehler" liefern, wenn ein Modul nicht freigeschaltet ist (siehe `soft`-Modus in `_api_call`).
+
+### Fehlzeiten (Fehlzeiten-Endpoint unbestätigt)
+
+Der genaue Endpunkt für Fehlzeiten (`classbook/get-student-absences`) ist in keinem öffentlichen
+Projekt belegt und liefert evtl. leer. Er läuft im `soft`-Modus (kein 500). Ein Traffic-Sample vom
+Fehlzeiten-Modul (siehe `tools/capture-api.js`) würde den echten Endpunkt liefern.
 
 ---
 

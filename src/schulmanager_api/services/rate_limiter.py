@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -55,9 +56,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         now = datetime.now(timezone.utc)
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = self._client_ip(request)
         auth = request.headers.get("authorization", "")
-        token_hint = auth[7:27] if auth.lower().startswith("bearer ") else "anon"
+        if auth.lower().startswith("bearer ") and len(auth) > 7:
+            # Hash the *whole* token so distinct users get distinct buckets. The old code used a
+            # fixed slice of the JWT header, which is identical across tokens -> one bucket per IP.
+            token_hint = hashlib.sha256(auth[7:].strip().encode("utf-8")).hexdigest()[:16]
+        else:
+            token_hint = "anon"
         key = f"{client_ip}:{token_hint}"
 
         allowed, retry_after = self._limiter.check(
@@ -81,3 +87,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response.headers["X-RateLimit-Limit"] = str(self._settings.rate_limit_requests)
         response.headers["X-RateLimit-Window"] = str(self._settings.rate_limit_window_seconds)
         return response
+
+    @staticmethod
+    def _client_ip(request: Request) -> str:
+        # Behind a reverse proxy the peer is the proxy; prefer the first X-Forwarded-For hop.
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            first = forwarded.split(",")[0].strip()
+            if first:
+                return first
+        return request.client.host if request.client else "unknown"

@@ -1,54 +1,54 @@
-# Entdeckte Schulmanager `api/calls`-Endpoints
+# Discovered Schulmanager `api/calls` Endpoints
 
-Aus echten Netzwerk-Captures (`tools/capture-api.js`) beobachtete `moduleName / endpointName`.
-Feld-Details (Parameter/Response) werden ergänzt, sobald ein v2-Capture (vollständig ausgeklappt) vorliegt.
+`moduleName / endpointName` observed from real network captures (`tools/capture-api.js`).
+Field details (parameters/response) will be added once a v2 capture (fully expanded) is available.
 
-## Bereits im Wrapper genutzt
-| Modul | Endpoint | Zweck |
+## Already used in the wrapper
+| Module | Endpoint | Purpose |
 |---|---|---|
-| `schedules` | `get-actual-lessons` | Stundenplan (inkl. Vertretung) |
-| `schedules` | `get-class-hours` | Stundenzeiten |
-| `classbook` | `get-homework` | Hausaufgaben |
-| `exams` | `get-exams` | Klausuren |
-| `exams` | `poqa` | Kalender-Events (Alt-Weg) |
-| `grades` | `get-grading-information-for-student` | Noten |
-| `letters` | `get-letters` | Elternbriefe |
-| `messenger` | `get-subscriptions` | Nachrichten-Threads |
+| `schedules` | `get-actual-lessons` | Timetable (incl. substitutions) |
+| `schedules` | `get-class-hours` | Lesson times |
+| `classbook` | `get-homework` | Homework |
+| `exams` | `get-exams` | Exams |
+| `exams` | `poqa` | Calendar events (legacy path) |
+| `grades` | `get-grading-information-for-student` | Grades |
+| `letters` | `get-letters` | Parent letters |
+| `messenger` | `get-subscriptions` | Message threads |
 
-## Neu entdeckt (Capture 2026-07-18)
-| Modul | Endpoint | Vermuteter Zweck | Wert |
+## Newly discovered (capture 2026-07-18)
+| Module | Endpoint | Presumed purpose | Value |
 |---|---|---|---|
-| `classbook` | `get-statistics` | **Fehlzeiten-Statistik** (Route `classbook.reports2.student.statistics`, Params `{studentId, start, end}`) | hoch |
-| `classbook` | `poqa` | **Fehlzeiten-Einträge** (ORM findAll auf der reports2-Route) | hoch |
-| `classbook` | `get-topics` | Unterrichtsthemen (Klassenbuch) | mittel |
-| `classbook` | `get-tiles` | Klassenbuch-Kacheln | niedrig |
-| `classbook` | `get-upcoming-conferences` | Anstehende Konferenzen/Gespräche | mittel |
-| `calendar` | `get-events-for-user` | **Termine** — sauberer Endpoint statt `exams/poqa`-Hack | hoch |
-| `schedules` | `get-substitution-texts-for-widget` | Vertretungstexte (Freitext) | mittel |
-| `schedules` | `get-occurrences-of-current-term` | Schultage/Termin-Struktur des Halbjahres | mittel |
-| `invoicing` | `poqa` | **Zahlungen/Rechnungen** | hoch |
-| `detention` | `poqa` | Nachsitzen | niedrig |
-| `documents` | `documents-visible` | Dokumente-Modul sichtbar? | niedrig |
-| `messenger` | `count-new-messages` | Anzahl neuer Nachrichten (Badge) | mittel |
-| `letters` | `get-current-term`, `poqa`, `user-can-see-setting-for-letter-mailing` | Elternbrief-Metadaten | niedrig |
-| `null` | `get-current-next-or-previous-term` | Aktuelles/nächstes Halbjahr | mittel |
+| `classbook` | `get-statistics` | **Absence statistics** (route `classbook.reports2.student.statistics`, params `{studentId, start, end}`) | high |
+| `classbook` | `poqa` | **Absence entries** (ORM findAll on the reports2 route) | high |
+| `classbook` | `get-topics` | Lesson topics (class register) | medium |
+| `classbook` | `get-tiles` | Class register tiles | low |
+| `classbook` | `get-upcoming-conferences` | Upcoming conferences/meetings | medium |
+| `calendar` | `get-events-for-user` | **Appointments** — clean endpoint instead of the `exams/poqa` hack | high |
+| `schedules` | `get-substitution-texts-for-widget` | Substitution texts (free text) | medium |
+| `schedules` | `get-occurrences-of-current-term` | School days/appointment structure of the term | medium |
+| `invoicing` | `poqa` | **Payments/invoices** | high |
+| `detention` | `poqa` | Detention | low |
+| `documents` | `documents-visible` | Documents module visible? | low |
+| `messenger` | `count-new-messages` | Number of new messages (badge) | medium |
+| `letters` | `get-current-term`, `poqa`, `user-can-see-setting-for-letter-mailing` | Parent letter metadata | low |
+| `null` | `get-current-next-or-previous-term` | Current/next term | medium |
 
-## Bestätigt & umgesetzt (v2-Capture 2026-07-18)
-| Feature | Endpoint | Params | Response (Kern) |
+## Confirmed & implemented (v2 capture 2026-07-18)
+| Feature | Endpoint | Params | Response (core) |
 |---|---|---|---|
-| **Fehlzeiten** | `classbook/get-history-absences-list` | `{term:{start,end,id}, student:{…,class:{…}}}` | `[{date, from, until, excused, comment, sickNote, exemptionRequest:{comment,isInternal}}]` |
-| (Zeitraum dazu) | `classbook/get-current-next-or-previous-term` | `{}` | `{start, end, id, preventAsCurrentTerm}` |
-| **Termine** | `calendar/get-events-for-user` | `{start, end, includeHolidays}` | `{nonRecurringEvents:[{summary,start,end,location,description,allDay,categoryId}], recurringEvents}` |
-| **Noten** (+Einzelnoten) | `grades/get-grading-information-for-student` | `{studentId, termId, start, end, gradingPeriodType:"entireYear"}` | `{courses, gradingEvents[].grades[].value, indiviualGrades[…], typePresets, finalGrades}` |
-| **Hausaufgaben** | `classbook/get-homework` | `{student:{id}}` | `[{date, subject, homework}]` — **keine ID** → Content-Hash-ID |
-| **Nachrichten** | `messenger/get-subscriptions` | `{all:false, includeArchived:false, reason:"whenLoadedSubscriptions"}` | `[{id, unreadCount, thread:{subject, senderString, lastMessageTimestamp}}]` |
+| **Absences** | `classbook/get-history-absences-list` | `{term:{start,end,id}, student:{…,class:{…}}}` | `[{date, from, until, excused, comment, sickNote, exemptionRequest:{comment,isInternal}}]` |
+| (accompanying period) | `classbook/get-current-next-or-previous-term` | `{}` | `{start, end, id, preventAsCurrentTerm}` |
+| **Appointments** | `calendar/get-events-for-user` | `{start, end, includeHolidays}` | `{nonRecurringEvents:[{summary,start,end,location,description,allDay,categoryId}], recurringEvents}` |
+| **Grades** (+ individual grades) | `grades/get-grading-information-for-student` | `{studentId, termId, start, end, gradingPeriodType:"entireYear"}` | `{courses, gradingEvents[].grades[].value, indiviualGrades[…], typePresets, finalGrades}` |
+| **Homework** | `classbook/get-homework` | `{student:{id}}` | `[{date, subject, homework}]` — **no ID** → content-hash ID |
+| **Messages** | `messenger/get-subscriptions` | `{all:false, includeArchived:false, reason:"whenLoadedSubscriptions"}` | `[{id, unreadCount, thread:{subject, senderString, lastMessageTimestamp}}]` |
 | Thread | `messenger/get-messages-by-subscription` | `{subscriptionId, loadAll:false}` | `{messages:[{text, createdAt, sender:{firstname,lastname}, attachments}], hasMoreMessages}` |
-| **Elternbriefe** | `letters/get-letters` | `{}` | `[{title, id, sentDate, studentStatuses:[{readTimestamp, studentId}]}]` |
-| **Stundenplan** | `schedules/get-actual-lessons` | `{student:{…}, start, end}` | `[{date, classHour:{number}, type, isCancelled, originalLessons:[{subject,teachers,room}]}]` |
+| **Parent letters** | `letters/get-letters` | `{}` | `[{title, id, sentDate, studentStatuses:[{readTimestamp, studentId}]}]` |
+| **Timetable** | `schedules/get-actual-lessons` | `{student:{…}, start, end}` | `[{date, classHour:{number}, type, isCancelled, originalLessons:[{subject,teachers,room}]}]` |
 
-## Noch nicht eingebaut (Kandidaten für neue Features)
-- **Zahlungen** (`invoicing/poqa`, model `modules/invoicing/general-invoice`): `studentInvoices[].{sum, paidSum, paid, sentTimestamp}`, `items[].studentItems[].{amount, paid}`, `dueDate`, `bankAccount`.
-- **Lernen** (`learning/get-learning-courses`, `get-course-units`, `get-learning-unit`): Aufgaben/Material mit `studentStatuses[].{seen, done}`.
-- **Klassenbuch-Themen** (`classbook/get-topics`): `[{date, subject, topic}]` (182 Einträge im Sample).
-- **Nachsitzen** (`detention/poqa`, model `modules/detention/detention-event-attendance`).
-- **Ferien/Schultage** (`schedules/get-occurrences-of-current-term`): `[{name, dates:[…]}]` — nutzbar, um schulfreie Tage im Stundenplan zu markieren.
+## Not yet integrated (candidates for new features)
+- **Payments** (`invoicing/poqa`, model `modules/invoicing/general-invoice`): `studentInvoices[].{sum, paidSum, paid, sentTimestamp}`, `items[].studentItems[].{amount, paid}`, `dueDate`, `bankAccount`.
+- **Learning** (`learning/get-learning-courses`, `get-course-units`, `get-learning-unit`): assignments/materials with `studentStatuses[].{seen, done}`.
+- **Class register topics** (`classbook/get-topics`): `[{date, subject, topic}]` (182 entries in the sample).
+- **Detention** (`detention/poqa`, model `modules/detention/detention-event-attendance`).
+- **Holidays/school days** (`schedules/get-occurrences-of-current-term`): `[{name, dates:[…]}]` — usable to mark non-school days in the timetable.

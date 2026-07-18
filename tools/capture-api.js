@@ -1,79 +1,101 @@
 /*
- * Schulmanager API Recorder
- * =========================
- * Zeigt dir (und mir) die ECHTEN moduleName/endpointName/parameters + Response-STRUKTUR
- * jedes /api/calls-Requests an — OHNE deine persönlichen Inhalte und OHNE deinen Login-Token.
+ * Schulmanager API Recorder v2
+ * ============================
+ * Zeigt die ECHTEN moduleName/endpointName/parameters + Response-STRUKTUR jedes /api/calls-
+ * Requests — OHNE deine persönlichen Inhalte (nur Schlüssel + Typen) und OHNE deinen Login-Token.
+ *
+ * WARUM v2: v1 loggte ein Objekt, das der Konsolen-Export EINKLAPPT ("{…}"). v2 gibt jede Zeile
+ * zusätzlich als vollständigen JSON-TEXT aus ("[SMAPI-JSON] {...}"), der im Export komplett
+ * enthalten ist. Am Ende kannst du mit  copy(smapiDump())  ALLES in die Zwischenablage kopieren.
  *
  * SO GEHT'S:
- *   1. login.schulmanager-online.de öffnen und normal einloggen.
- *   2. F12 druecken -> Reiter "Konsole" / "Console".
- *   3. Den GESAMTEN Code unten hineinkopieren und Enter druecken.
- *   4. Im Schulmanager nacheinander auf die Module klicken:
- *      Stundenplan, Hausaufgaben, Noten, Nachrichten, Fehlzeiten, Elternbriefe, Zahlungen, Klassenbuch ...
- *   5. In der Konsole erscheint pro Modul eine Zeile [SMAPI] <modul> / <endpoint>.
- *   6. Rechtsklick in die Konsole -> "Alle Nachrichten speichern" (oder alles markieren + kopieren)
- *      und mir den Text schicken.
+ *   1. login.schulmanager-online.de öffnen und einloggen.
+ *   2. F12 -> Reiter "Konsole" / "Console".
+ *   3. Diesen ganzen Code einfügen und Enter. (Blockiert die Konsole das Einfügen: einmal
+ *      "allow pasting" tippen, Enter, dann erneut einfügen.)
+ *   4. Durch die Module klicken (Fehlzeiten, Stundenplan, Noten, Nachrichten, ...).
+ *   5. Am Ende in der Konsole eingeben:   copy(smapiDump())
+ *      -> alles liegt in der Zwischenablage; hier einfügen und schicken.
+ *      (Alternativ: Konsole exportieren; die [SMAPI-JSON]-Zeilen enthalten alles.)
  *
- * SICHERHEIT: Das Snippet liest NUR moduleName/endpointName/parameters und die STRUKTUR
- * (Schlüssel + Typen) der Antwort. Es liest NICHT den Inhalt (keine Namen/Noten/Texte) und
- * NICHT den Authorization-Header. Alles laeuft nur lokal in deinem Browser-Tab.
+ * SICHERHEIT: Es werden nur moduleName/endpointName, die parameters (Schüler-ID/Datum/ORM-Query,
+ * nicht geheim) und die STRUKTUR der Antwort (Schlüssel + Typen, KEINE Inhalte) gelesen. Der
+ * Authorization-Header wird nie angefasst. Alles läuft nur lokal in deinem Browser-Tab.
  */
 (() => {
+  const collected = [];
+
   const schemaOf = (v, depth = 0) => {
     if (v === null || v === undefined) return typeof v;
-    if (Array.isArray(v)) return v.length ? ["array(" + v.length + ")", schemaOf(v[0], depth + 1)] : "array(0)";
+    if (Array.isArray(v)) {
+      return v.length ? { __array_len: v.length, __item: schemaOf(v[0], depth + 1) } : "array(0)";
+    }
     if (typeof v === "object") {
-      if (depth > 5) return "object(…)";
+      if (depth > 6) return "object(…)";
       const o = {};
-      for (const k of Object.keys(v).slice(0, 50)) o[k] = schemaOf(v[k], depth + 1);
+      for (const k of Object.keys(v).slice(0, 60)) o[k] = schemaOf(v[k], depth + 1);
       return o;
     }
     if (typeof v === "string") return "string";
     return typeof v;
   };
 
-  const log = (reqBody, resBody) => {
+  const emit = (reqBody, resBody) => {
     try {
       (reqBody.requests || []).forEach((r, i) => {
         const result = (resBody.results || [])[i] || {};
-        console.log(
-          "%c[SMAPI] " + r.moduleName + " / " + r.endpointName,
-          "color:#0a0;font-weight:bold",
-          { parameters: r.parameters, status: result.status, responseSchema: schemaOf(result.data) }
-        );
+        const entry = {
+          module: r.moduleName,
+          endpoint: r.endpointName,
+          parameters: r.parameters,
+          status: result.status,
+          responseSchema: schemaOf(result.data),
+        };
+        collected.push(entry);
+        // Full JSON as text so it survives a console export unabridged.
+        console.log("%c[SMAPI-JSON] " + JSON.stringify(entry), "color:#0a0");
       });
     } catch (e) { /* ignore */ }
   };
 
   const isCalls = (u) => typeof u === "string" && u.indexOf("/api/calls") !== -1;
 
-  // --- fetch() abfangen ---
   const origFetch = window.fetch;
   window.fetch = async (...args) => {
     const [input, init] = args;
     const url = typeof input === "string" ? input : (input && input.url);
     const res = await origFetch(...args);
     try {
-      if (isCalls(url) && init && init.body) {
-        const clone = res.clone();
-        log(JSON.parse(init.body), await clone.json());
-      }
+      if (isCalls(url) && init && init.body) emit(JSON.parse(init.body), await res.clone().json());
     } catch (e) { /* ignore */ }
     return res;
   };
 
-  // --- XMLHttpRequest abfangen (axios nutzt XHR) ---
   const XO = XMLHttpRequest.prototype.open;
   const XS = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open = function (m, u, ...rest) { this.__smurl = u; return XO.call(this, m, u, ...rest); };
   XMLHttpRequest.prototype.send = function (body) {
     if (isCalls(this.__smurl)) {
       this.addEventListener("load", () => {
-        try { log(JSON.parse(body), JSON.parse(this.responseText)); } catch (e) { /* ignore */ }
+        try { emit(JSON.parse(body), JSON.parse(this.responseText)); } catch (e) { /* ignore */ }
       });
     }
     return XS.call(this, body);
   };
 
-  console.log("%c[SMAPI] Recorder aktiv – klick jetzt durch die Module. Danach Konsole kopieren & schicken.", "color:#06c;font-weight:bold;font-size:14px");
+  // Merge duplicate endpoints (keep the richest schema) so the dump is compact.
+  window.smapiDump = () => {
+    const byKey = new Map();
+    for (const e of collected) {
+      const key = e.module + "/" + e.endpoint;
+      const prev = byKey.get(key);
+      if (!prev || JSON.stringify(e.responseSchema).length > JSON.stringify(prev.responseSchema).length) {
+        byKey.set(key, e);
+      }
+    }
+    return JSON.stringify([...byKey.values()], null, 2);
+  };
+  window.__smapi = collected;
+
+  console.log("%c[SMAPI] v2 aktiv – klick durch die Module. Danach:  copy(smapiDump())", "color:#06c;font-weight:bold;font-size:14px");
 })();

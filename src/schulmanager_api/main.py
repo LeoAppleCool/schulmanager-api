@@ -38,7 +38,7 @@ _startup_config_warnings()
 app = FastAPI(
     title=settings.app_name,
     description="Modulare API fuer Schulmanager-Daten",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 app.add_middleware(

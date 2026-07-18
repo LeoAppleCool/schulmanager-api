@@ -33,7 +33,22 @@ Feld-Details (Parameter/Response) werden ergänzt, sobald ein v2-Capture (vollst
 | `letters` | `get-current-term`, `poqa`, `user-can-see-setting-for-letter-mailing` | Elternbrief-Metadaten | niedrig |
 | `null` | `get-current-next-or-previous-term` | Aktuelles/nächstes Halbjahr | mittel |
 
-## Offen (braucht v2-Capture für Feld-Details)
-- **Fehlzeiten** exakt: `classbook/get-statistics` (Params + Response-Felder) und `classbook/poqa` (ORM-`model` + Response-Felder).
-- **Termine** ggf. auf `calendar/get-events-for-user` umstellen (Params + Response).
-- **Zahlungen** neu: `invoicing/poqa` (ORM-`model` + Response).
+## Bestätigt & umgesetzt (v2-Capture 2026-07-18)
+| Feature | Endpoint | Params | Response (Kern) |
+|---|---|---|---|
+| **Fehlzeiten** | `classbook/get-history-absences-list` | `{term:{start,end,id}, student:{…,class:{…}}}` | `[{date, from, until, excused, comment, sickNote, exemptionRequest:{comment,isInternal}}]` |
+| (Zeitraum dazu) | `classbook/get-current-next-or-previous-term` | `{}` | `{start, end, id, preventAsCurrentTerm}` |
+| **Termine** | `calendar/get-events-for-user` | `{start, end, includeHolidays}` | `{nonRecurringEvents:[{summary,start,end,location,description,allDay,categoryId}], recurringEvents}` |
+| **Noten** (+Einzelnoten) | `grades/get-grading-information-for-student` | `{studentId, termId, start, end, gradingPeriodType:"entireYear"}` | `{courses, gradingEvents[].grades[].value, indiviualGrades[…], typePresets, finalGrades}` |
+| **Hausaufgaben** | `classbook/get-homework` | `{student:{id}}` | `[{date, subject, homework}]` — **keine ID** → Content-Hash-ID |
+| **Nachrichten** | `messenger/get-subscriptions` | `{all:false, includeArchived:false, reason:"whenLoadedSubscriptions"}` | `[{id, unreadCount, thread:{subject, senderString, lastMessageTimestamp}}]` |
+| Thread | `messenger/get-messages-by-subscription` | `{subscriptionId, loadAll:false}` | `{messages:[{text, createdAt, sender:{firstname,lastname}, attachments}], hasMoreMessages}` |
+| **Elternbriefe** | `letters/get-letters` | `{}` | `[{title, id, sentDate, studentStatuses:[{readTimestamp, studentId}]}]` |
+| **Stundenplan** | `schedules/get-actual-lessons` | `{student:{…}, start, end}` | `[{date, classHour:{number}, type, isCancelled, originalLessons:[{subject,teachers,room}]}]` |
+
+## Noch nicht eingebaut (Kandidaten für neue Features)
+- **Zahlungen** (`invoicing/poqa`, model `modules/invoicing/general-invoice`): `studentInvoices[].{sum, paidSum, paid, sentTimestamp}`, `items[].studentItems[].{amount, paid}`, `dueDate`, `bankAccount`.
+- **Lernen** (`learning/get-learning-courses`, `get-course-units`, `get-learning-unit`): Aufgaben/Material mit `studentStatuses[].{seen, done}`.
+- **Klassenbuch-Themen** (`classbook/get-topics`): `[{date, subject, topic}]` (182 Einträge im Sample).
+- **Nachsitzen** (`detention/poqa`, model `modules/detention/detention-event-attendance`).
+- **Ferien/Schultage** (`schedules/get-occurrences-of-current-term`): `[{name, dates:[…]}]` — nutzbar, um schulfreie Tage im Stundenplan zu markieren.

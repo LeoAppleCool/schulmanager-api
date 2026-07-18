@@ -146,8 +146,9 @@ Der `selenium`-Provider spricht die private Schulmanager-API direkt über HTTP a
 | Stundenzeiten | `schedules` / `get-class-hours` |
 | Hausaufgaben | `classbook` / `get-homework` |
 | Klausuren | `exams` / `get-exams` |
-| Termine (Kalender) | `exams` / `poqa` (`modules/calendar/event`) |
-| Noten | `grades` / `get-grading-information-for-student` |
+| Termine (Kalender) | `calendar` / `get-events-for-user` |
+| Noten (inkl. Einzelnoten) | `grades` / `get-grading-information-for-student` |
+| Fehlzeiten | `classbook` / `get-history-absences-list` |
 | Nachrichten (Threads) | `messenger` / `get-subscriptions`, `messenger` / `get-messages-by-subscription` |
 | Elternbriefe | `letters` / `get-letters` |
 
@@ -167,11 +168,8 @@ Read-fähige Module, die (noch) nicht abgedeckt sind, nach Nutzwert:
 > ⚠️ Welche Module verfügbar sind, hängt von der jeweiligen Schule ab — neue Endpunkte müssen
 > „leer statt Fehler" liefern, wenn ein Modul nicht freigeschaltet ist (siehe `soft`-Modus in `_api_call`).
 
-### Fehlzeiten (Fehlzeiten-Endpoint unbestätigt)
-
-Der genaue Endpunkt für Fehlzeiten (`classbook/get-student-absences`) ist in keinem öffentlichen
-Projekt belegt und liefert evtl. leer. Er läuft im `soft`-Modus (kein 500). Ein Traffic-Sample vom
-Fehlzeiten-Modul (siehe `tools/capture-api.js`) würde den echten Endpunkt liefern.
+Vollständige Endpoint-Liste inkl. bestätigter Parameter/Response-Strukturen und noch nicht
+eingebauter Module (Zahlungen, Lernen): **`docs/discovered-endpoints.md`**.
 
 ---
 

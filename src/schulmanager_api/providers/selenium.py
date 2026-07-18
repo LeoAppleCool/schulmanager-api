@@ -237,7 +237,15 @@ class SeleniumSchulmanagerProvider:
                     or "Hausaufgabe"
                 )
                 done = bool(row.get("done") or row.get("isDone") or row.get("completed"))
-                item_id = self._as_text(row.get("id") or row.get("uuid") or f"hw_{student_id}_{len(items)}")
+                # classbook/get-homework returns {date, subject, homework} with NO server id.
+                # Derive a stable content-hash id so downstream consumers (e.g. the Discord bot's
+                # per-item messages) don't churn when the list order changes between syncs.
+                raw_id = row.get("id") or row.get("uuid")
+                if raw_id:
+                    item_id = self._as_text(raw_id)
+                else:
+                    basis = f"{due_date.isoformat()}|{subject}|{text}"
+                    item_id = "hw_" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12]
 
                 items.append(
                     HomeworkItem(
@@ -394,82 +402,63 @@ class SeleniumSchulmanagerProvider:
         start = date.today() - timedelta(days=30)
         end = date.today() + timedelta(days=180)
 
+        # calendar/get-events-for-user is the real dashboard endpoint (replaces the old
+        # exams/poqa ORM hack). It returns {nonRecurringEvents:[...], recurringEvents:[...]}.
         data = await self._api_call(
             session,
-            "exams",
-            "poqa",
-            {
-                "action": {
-                    "model": "modules/calendar/event",
-                    "action": "findAll",
-                    "parameters": [
-                        {
-                            "where": {
-                                "start": {"$lte": f"{(end + timedelta(days=1)).isoformat()}T00:00:00.000Z"},
-                                "end": {"$gte": f"{(start - timedelta(days=1)).isoformat()}T00:00:00.000Z"},
-                            },
-                            "include": [
-                                {
-                                    "association": "visibleForGroups",
-                                    "required": True,
-                                    "attributes": ["id"],
-                                    "include": [
-                                        {
-                                            "association": "students",
-                                            "required": True,
-                                            "attributes": ["id"],
-                                            "where": {"id": int(student_id)},
-                                        }
-                                    ],
-                                }
-                            ],
-                        }
-                    ],
-                },
-                "uiState": "main.modules.exams.view",
-            },
+            "calendar",
+            "get-events-for-user",
+            {"start": start.isoformat(), "end": end.isoformat(), "includeHolidays": False},
+            soft=True,
         )
 
-        events: list[EventItem] = []
-        if isinstance(data, list):
-            for row in data:
-                if not isinstance(row, dict):
-                    continue
-                start_dt = self._parse_datetime(row.get("start"))
-                end_dt = self._parse_datetime(row.get("end"))
-                if start_dt is None or end_dt is None:
-                    continue
-                events.append(
-                    EventItem(
-                        id=self._as_text(row.get("id") or f"event_{student_id}_{len(events)}"),
-                        title=self._as_text(row.get("summary") or row.get("title") or "Schultermin"),
-                        start=start_dt,
-                        end=end_dt,
-                        location=self._opt_text(row.get("location")),
-                        description=self._opt_text(row.get("description")),
-                    )
-                )
+        rows: list[Any] = []
+        if isinstance(data, dict):
+            for key in ("nonRecurringEvents", "recurringEvents", "events"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    rows.extend(value)
+        elif isinstance(data, list):
+            rows = data
 
+        events: list[EventItem] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            start_dt = self._parse_datetime(row.get("start"))
+            end_dt = self._parse_datetime(row.get("end")) or start_dt
+            if start_dt is None or end_dt is None:
+                continue
+            events.append(
+                EventItem(
+                    id=self._as_text(row.get("id") or f"event_{student_id}_{len(events)}"),
+                    title=self._as_text(row.get("summary") or row.get("title") or "Schultermin"),
+                    start=start_dt,
+                    end=end_dt,
+                    location=self._opt_text(row.get("location")),
+                    description=self._opt_text(row.get("description")),
+                )
+            )
+
+        events.sort(key=lambda event: event.start)
         return events
 
     async def get_absences(self, context: LoginContext, student_id: str) -> list[AbsenceItem]:
         session, student_raw = self._require_student_session(context, student_id)
+        student_payload = self._student_payload(student_raw)
 
-        start = date.today() - timedelta(days=180)
-        end = date.today() + timedelta(days=30)
+        # Real Fehlzeiten endpoint (confirmed via live capture): classbook/get-history-absences-list
+        # returns per-absence records; it needs the current classbook term.
+        parameters: dict[str, Any] = {"student": student_payload}
+        term = await self._get_classbook_term(session)
+        if term is not None:
+            parameters["term"] = term
 
-        # NOTE: 'classbook/get-student-absences' is unconfirmed against public clients; if a live
-        # traffic capture reveals the real Fehlzeiten endpoint, wire it in here. soft=True so a
-        # wrong/disabled endpoint degrades to [] instead of failing the request (401 still raises).
         data = await self._api_call(
             session,
             "classbook",
-            "get-student-absences",
-            {
-                "student": self._student_payload(student_raw),
-                "start": start.isoformat(),
-                "end": end.isoformat(),
-            },
+            "get-history-absences-list",
+            parameters,
             soft=True,
         )
 
@@ -478,20 +467,26 @@ class SeleniumSchulmanagerProvider:
             for row in data:
                 if not isinstance(row, dict):
                     continue
-                absence_date = self._parse_date(row.get("date") or row.get("absenceDate"))
+                absence_date = self._parse_date(row.get("date"))
                 if absence_date is None:
                     continue
 
-                periods_raw = row.get("lessons") or row.get("periods") or row.get("units") or []
-                if isinstance(periods_raw, list):
-                    periods = [str(p) for p in periods_raw if p is not None]
-                else:
-                    periods = []
+                # 'excused' / 'exemptionRequest' are objects when present, null otherwise.
+                exemption = row.get("exemptionRequest")
+                excused = row.get("excused") is not None or isinstance(exemption, dict)
 
-                reason = self._opt_text(row.get("reason") or row.get("note") or row.get("comment"))
-                excused = bool(row.get("excused") or row.get("isExcused") or row.get("justified"))
+                reason = self._opt_text(row.get("comment"))
+                if not reason and isinstance(exemption, dict):
+                    reason = self._opt_text(exemption.get("comment"))
+                if not reason and row.get("sickNote") is not None:
+                    reason = "Krankmeldung"
+
+                periods: list[str] = []
+                label = self._absence_time_label(row.get("from"), row.get("until"))
+                if label:
+                    periods = [label]
+
                 item_id = self._as_text(row.get("id") or f"abs_{student_id}_{len(absences)}")
-
                 absences.append(
                     AbsenceItem(
                         id=item_id,
@@ -502,7 +497,34 @@ class SeleniumSchulmanagerProvider:
                     )
                 )
 
+        absences.sort(key=lambda absence: absence.date, reverse=True)
         return absences
+
+    async def _get_classbook_term(self, session: SeleniumAccountSession) -> dict[str, Any] | None:
+        data = await self._api_call(
+            session, "classbook", "get-current-next-or-previous-term", {}, soft=True
+        )
+        if isinstance(data, dict) and data.get("id") is not None:
+            return {
+                "start": self._opt_text(data.get("start")),
+                "end": self._opt_text(data.get("end")),
+                "id": self._opt_int(data.get("id")),
+                "preventAsCurrentTerm": bool(data.get("preventAsCurrentTerm")),
+            }
+        return None
+
+    def _absence_time_label(self, from_value: Any, until_value: Any) -> str | None:
+        def to_hhmm(value: Any) -> str | None:
+            dt = self._parse_datetime(value)
+            if dt is not None:
+                return dt.astimezone(_school_tz()).strftime("%H:%M")
+            return self._normalize_hhmm(self._opt_text(value))
+
+        start_label = to_hhmm(from_value)
+        end_label = to_hhmm(until_value)
+        if start_label and end_label:
+            return f"{start_label}–{end_label}"
+        return start_label or end_label
 
     async def get_messages(self, context: LoginContext, student_id: str) -> list[MessageItem]:
         """Messenger inbox: list of chat threads via messenger/get-subscriptions.
@@ -511,7 +533,13 @@ class SeleniumSchulmanagerProvider:
         """
         session, _ = self._require_student_session(context, student_id)
 
-        data = await self._api_call(session, "messenger", "get-subscriptions", {}, soft=True)
+        data = await self._api_call(
+            session,
+            "messenger",
+            "get-subscriptions",
+            {"all": False, "includeArchived": False, "reason": "whenLoadedSubscriptions"},
+            soft=True,
+        )
 
         rows: list[Any]
         if isinstance(data, list):
@@ -573,7 +601,7 @@ class SeleniumSchulmanagerProvider:
             session,
             "messenger",
             "get-messages-by-subscription",
-            {"subscriptionId": self._opt_int(subscription_id) or subscription_id},
+            {"subscriptionId": self._as_text(subscription_id), "loadAll": False},
             soft=True,
         )
 
@@ -1163,8 +1191,31 @@ class SeleniumSchulmanagerProvider:
                         )
                     )
 
-            if result:
-                return result
+        # Individual grades that aren't attached to a grading event (Schulmanager ships this key
+        # misspelled as "indiviualGrades"; accept both spellings).
+        individual = payload.get("indiviualGrades") or payload.get("individualGrades") or []
+        if isinstance(individual, list):
+            for grade_data in individual:
+                if not isinstance(grade_data, dict):
+                    continue
+                raw_value = grade_data.get("value") or grade_data.get("displayValue")
+                if raw_value in (None, ""):
+                    continue
+                course_id = self._opt_int(grade_data.get("courseId"))
+                course = course_map.get(course_id) if course_id is not None else None
+                subject = self._derive_grade_subject(grade_data, course, subject_map)
+                result.append(
+                    GradeItem(
+                        subject=subject,
+                        grade=self._normalize_grade_value(raw_value),
+                        weight=self._opt_float(grade_data.get("weighting")),
+                        date=self._parse_date(grade_data.get("date")),
+                        comment=self._as_text(grade_data.get("topic") or grade_data.get("comment") or "Einzelnote"),
+                    )
+                )
+
+        if result:
+            return result
 
         # Fallback for already grouped grade structures.
         subjects = payload.get("subjects")
@@ -1446,6 +1497,10 @@ class SeleniumSchulmanagerProvider:
 
         lesson_type = self._as_text(row.get("type") or "")
         change_type = self._map_change_type(lesson_type)
+        # get-actual-lessons carries an explicit isCancelled flag; honor it even when 'type'
+        # doesn't spell out the cancellation.
+        if change_type is None and row.get("isCancelled"):
+            change_type = LessonChangeType.CANCELLATION
         note = self._opt_text(row.get("substitutionText") or row.get("comment"))
         subject = self._normalize_schedule_subject(subject, row=row, lesson_type=lesson_type, note=note)
 

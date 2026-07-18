@@ -99,6 +99,8 @@ Vollständige Liste: `.env.example`
 | `GET` | `/students/{id}/messages` | Nachrichten / Chat-Threads (Messenger) |
 | `GET` | `/students/{id}/messages/{subscription_id}` | Einzelner Nachrichten-Thread |
 | `GET` | `/students/{id}/letters` | Elternbriefe (mit Lesestatus) |
+| `GET` | `/students/{id}/payments` | Zahlungen / Rechnungen (bezahlt/offen) |
+| `GET` | `/students/{id}/learning` | Lernen: Aufgaben & Material (seen/done) |
 | `GET` | `/students/{id}/calendar.ics` | ICS-Kalenderexport |
 | `POST` | `/webhooks` | Webhook registrieren |
 | `GET` | `/webhooks` | Eigene Webhooks auflisten |

@@ -47,6 +47,8 @@ async def _run_sync(
     absences_count = 0
     messages_count = 0
     letters_count = 0
+    payments_count = 0
+    learning_count = 0
     triggered_events = 0
 
     for student in principal.context.students:
@@ -108,6 +110,18 @@ async def _run_sync(
             if settings.cache_enabled:
                 cache.set(f"{principal.account_id}:{sid}:letters:", letter_list, settings.cache_ttl_messages_seconds)
 
+        if payload.payments:
+            payment_list = await provider.get_payments(principal.context, sid)
+            payments_count += len(payment_list)
+            if settings.cache_enabled:
+                cache.set(f"{principal.account_id}:{sid}:payments:", payment_list, settings.cache_ttl_exams_seconds)
+
+        if payload.learning:
+            learning_list = await provider.get_learning(principal.context, sid)
+            learning_count += len(learning_list)
+            if settings.cache_enabled:
+                cache.set(f"{principal.account_id}:{sid}:learning:", learning_list, settings.cache_ttl_exams_seconds)
+
     summary = {
         "students_processed": len(principal.context.students),
         "schedule_days": schedule_days,
@@ -118,6 +132,8 @@ async def _run_sync(
         "absences": absences_count,
         "messages": messages_count,
         "letters": letters_count,
+        "payments": payments_count,
+        "learning": learning_count,
     }
     triggered_events += await event_service.publish_sync_completed(principal.account_id, summary)
     metrics_store.syncs_total.labels(status="success").inc()
@@ -132,5 +148,7 @@ async def _run_sync(
         absences=absences_count,
         messages=messages_count,
         letters=letters_count,
+        payments=payments_count,
+        learning=learning_count,
         triggered_events=triggered_events,
     )

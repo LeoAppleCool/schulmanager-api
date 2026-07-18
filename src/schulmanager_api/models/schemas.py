@@ -149,6 +149,28 @@ class LetterItem(BaseModel):
     attachment_count: int = 0
 
 
+class PaymentItem(BaseModel):
+    """Zahlung / invoice item (invoicing/poqa)."""
+    id: str
+    title: str
+    amount: float | None = None
+    paid_amount: float | None = None
+    paid: bool = False
+    due_date: DateType | None = None
+    date: DateType | None = None
+    invoice_number: str | None = None
+
+
+class LearningItem(BaseModel):
+    """Lern-Einheit / learning unit (learning module): assignment or material."""
+    id: str
+    subject: str
+    title: str
+    published: datetime | None = None
+    seen: bool = False
+    done: bool = False
+
+
 class LoginContext(BaseModel):
     account_id: str
     email: str
@@ -213,6 +235,8 @@ class SyncRefreshRequest(BaseModel):
     absences: bool = True
     messages: bool = True
     letters: bool = True
+    payments: bool = True
+    learning: bool = True
     force_refresh: bool = True
 
 
@@ -226,6 +250,8 @@ class SyncRefreshResult(BaseModel):
     absences: int
     messages: int
     letters: int = 0
+    payments: int = 0
+    learning: int = 0
     triggered_events: int
 
 

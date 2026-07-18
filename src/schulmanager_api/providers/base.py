@@ -10,10 +10,12 @@ from schulmanager_api.models.schemas import (
     ExamItem,
     GradeItem,
     HomeworkItem,
+    LearningItem,
     LetterItem,
     LoginContext,
     MessageItem,
     MessageThread,
+    PaymentItem,
     ScheduleDay,
     Student,
 )
@@ -54,3 +56,7 @@ class SchulmanagerProvider(Protocol):
     ) -> MessageThread: ...
 
     async def get_letters(self, context: LoginContext, student_id: str) -> list[LetterItem]: ...
+
+    async def get_payments(self, context: LoginContext, student_id: str) -> list[PaymentItem]: ...
+
+    async def get_learning(self, context: LoginContext, student_id: str) -> list[LearningItem]: ...

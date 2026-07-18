@@ -109,6 +109,50 @@ def test_get_grades_includes_individual_grades() -> None:
     assert all(g.subject == "Mathe" for g in grades)
 
 
+def test_get_payments_from_invoicing() -> None:
+    responses = {
+        ("invoicing", "poqa"): [
+            {
+                "id": 900, "number": 42, "date": "2026-07-01", "dueDate": "2026-07-20",
+                "items": [{"name": "Klassenfahrt"}],
+                "studentInvoices": [{"sum": "120.00", "paidSum": "0.00", "paid": False}],
+            },
+            {
+                "id": 901, "number": 21, "date": "2026-05-01", "dueDate": "2026-05-15",
+                "items": [{"name": "Kopiergeld"}],
+                "studentInvoices": [{"sum": "15.00", "paidSum": "15.00", "paid": True}],
+            },
+        ],
+    }
+    provider, ctx = _provider_with_canned(responses)
+    payments = asyncio.run(provider.get_payments(ctx, STUDENT_ID))
+    assert len(payments) == 2
+    # Unpaid first
+    assert payments[0].paid is False
+    unpaid = next(p for p in payments if p.id == "900")
+    assert unpaid.title == "Klassenfahrt"
+    assert unpaid.amount == 120.0
+    assert unpaid.invoice_number == "42"
+
+
+def test_get_learning_units() -> None:
+    responses = {
+        ("learning", "get-learning-courses"): [
+            {"id": 10, "subjectId": 1, "subject": {"name": "Digitale Bildung", "abbreviation": "DB"}},
+        ],
+        ("learning", "get-course-units"): [
+            {"id": "u1", "name": "Arbeitsblatt 1", "publicationTimestamp": "2026-07-10T09:00:00",
+             "studentStatuses": [{"id": "s1", "seen": True, "done": False}]},
+        ],
+    }
+    provider, ctx = _provider_with_canned(responses)
+    units = asyncio.run(provider.get_learning(ctx, STUDENT_ID))
+    assert len(units) == 1
+    assert units[0].subject == "Digitale Bildung"
+    assert units[0].title == "Arbeitsblatt 1"
+    assert units[0].seen is True and units[0].done is False
+
+
 def test_get_messages_unread_count() -> None:
     responses = {
         ("messenger", "get-subscriptions"): [

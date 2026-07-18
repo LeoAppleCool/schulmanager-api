@@ -11,12 +11,14 @@ from schulmanager_api.models.schemas import (
     ExamItem,
     GradeItem,
     HomeworkItem,
+    LearningItem,
     Lesson,
     LessonChangeType,
     LetterItem,
     LoginContext,
     MessageItem,
     MessageThread,
+    PaymentItem,
     ScheduleDay,
     Student,
     ThreadMessage,
@@ -242,6 +244,53 @@ class MockSchulmanagerProvider:
                 sender="Schulleitung",
                 requires_confirmation=False,
                 attachment_count=0,
+            ),
+        ]
+
+    async def get_payments(self, context: LoginContext, student_id: str) -> list[PaymentItem]:
+        self._ensure_student(context, student_id)
+        return [
+            PaymentItem(
+                id="inv_001",
+                title="Klassenfahrt Berlin",
+                amount=120.0,
+                paid_amount=0.0,
+                paid=False,
+                due_date=date.today() + timedelta(days=10),
+                date=date.today() - timedelta(days=4),
+                invoice_number="2026-042",
+            ),
+            PaymentItem(
+                id="inv_002",
+                title="Kopiergeld",
+                amount=15.0,
+                paid_amount=15.0,
+                paid=True,
+                due_date=date.today() - timedelta(days=20),
+                date=date.today() - timedelta(days=40),
+                invoice_number="2026-021",
+            ),
+        ]
+
+    async def get_learning(self, context: LoginContext, student_id: str) -> list[LearningItem]:
+        self._ensure_student(context, student_id)
+        now = datetime.now(timezone.utc)
+        return [
+            LearningItem(
+                id="unit_001",
+                subject="Digitale Bildung",
+                title="Arbeitsblatt: Tabellenkalkulation",
+                published=now - timedelta(days=1),
+                seen=False,
+                done=False,
+            ),
+            LearningItem(
+                id="unit_002",
+                subject="Englisch",
+                title="Vocab Unit 5",
+                published=now - timedelta(days=6),
+                seen=True,
+                done=True,
             ),
         ]
 

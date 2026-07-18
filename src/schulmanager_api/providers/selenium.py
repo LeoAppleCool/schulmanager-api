@@ -23,12 +23,14 @@ from schulmanager_api.models.schemas import (
     ExamItem,
     GradeItem,
     HomeworkItem,
+    LearningItem,
     Lesson,
     LessonChangeType,
     LetterItem,
     LoginContext,
     MessageItem,
     MessageThread,
+    PaymentItem,
     ScheduleDay,
     Student,
     ThreadMessage,
@@ -709,6 +711,145 @@ class SeleniumSchulmanagerProvider:
 
         letters.sort(key=lambda letter: (letter.date is not None, letter.date or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
         return letters
+
+    async def get_payments(self, context: LoginContext, student_id: str) -> list[PaymentItem]:
+        """Zahlungen / invoices (invoicing/poqa, model modules/invoicing/general-invoice)."""
+        session, _ = self._require_student_session(context, student_id)
+        sid = int(student_id)
+
+        query = {
+            "action": {
+                "model": "modules/invoicing/general-invoice",
+                "action": "findAll",
+                "parameters": [
+                    {
+                        "where": {
+                            "$or": [
+                                {"createdAt": {"$lt": "2021-10-18"}},
+                                {"sentTimestamp": {"$not": None}},
+                            ]
+                        },
+                        "include": [
+                            {
+                                "association": "items",
+                                "required": False,
+                                "include": [
+                                    {
+                                        "association": "studentItems",
+                                        "required": True,
+                                        "where": {"studentId": {"$in": [sid]}},
+                                    }
+                                ],
+                            },
+                            {
+                                "association": "studentInvoices",
+                                "required": True,
+                                "include": [
+                                    {
+                                        "association": "student",
+                                        "required": True,
+                                        "include": [
+                                            {"association": "paymentData", "required": True},
+                                            {"association": "class", "required": False},
+                                        ],
+                                    }
+                                ],
+                                "where": {"studentId": {"$in": [sid]}},
+                            },
+                            {"association": "bankAccount", "required": False},
+                        ],
+                    }
+                ],
+            },
+            "uiState": "main.modules.invoicing.studentsInvoices",
+        }
+
+        rows = await self._api_call(session, "invoicing", "poqa", query, soft=True)
+
+        payments: list[PaymentItem] = []
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                number = row.get("number")
+                student_invoices = row.get("studentInvoices") or []
+                sinv = student_invoices[0] if student_invoices and isinstance(student_invoices[0], dict) else {}
+
+                items = row.get("items") or []
+                title = None
+                if items and isinstance(items[0], dict):
+                    title = self._opt_text(items[0].get("name"))
+                if not title:
+                    title = f"Rechnung {number}" if number is not None else "Zahlung"
+
+                payments.append(
+                    PaymentItem(
+                        id=self._as_text(row.get("id") or f"inv_{student_id}_{len(payments)}"),
+                        title=title,
+                        amount=self._opt_float(sinv.get("sum")),
+                        paid_amount=self._opt_float(sinv.get("paidSum")),
+                        paid=bool(sinv.get("paid")),
+                        due_date=self._parse_date(row.get("dueDate")),
+                        date=self._parse_date(row.get("date")),
+                        invoice_number=self._opt_text(number),
+                    )
+                )
+
+        payments.sort(
+            key=lambda payment: (payment.paid, payment.due_date or date.max),
+        )
+        return payments
+
+    async def get_learning(self, context: LoginContext, student_id: str) -> list[LearningItem]:
+        """Lernen / learning units (learning/get-learning-courses + get-course-units)."""
+        session, student_raw = self._require_student_session(context, student_id)
+        student_payload = self._student_payload(student_raw)
+
+        courses = await self._api_call(
+            session, "learning", "get-learning-courses", {"student": {"id": int(student_id)}}, soft=True
+        )
+
+        items: list[LearningItem] = []
+        if isinstance(courses, list):
+            for course in courses:
+                if not isinstance(course, dict):
+                    continue
+                subject_raw = course.get("subject")
+                if isinstance(subject_raw, dict):
+                    subject = self._as_text(subject_raw.get("name") or subject_raw.get("abbreviation") or "Fach")
+                else:
+                    subject = self._as_text(subject_raw or "Fach")
+
+                units = await self._api_call(
+                    session,
+                    "learning",
+                    "get-course-units",
+                    {"student": student_payload, "course": course},
+                    soft=True,
+                )
+                if not isinstance(units, list):
+                    continue
+                for unit in units:
+                    if not isinstance(unit, dict):
+                        continue
+                    statuses = unit.get("studentStatuses") or []
+                    status = statuses[0] if statuses and isinstance(statuses[0], dict) else {}
+                    items.append(
+                        LearningItem(
+                            id=self._as_text(unit.get("id") or f"unit_{len(items)}"),
+                            subject=subject,
+                            title=self._as_text(unit.get("name") or "Lerneinheit"),
+                            published=self._parse_datetime(unit.get("publicationTimestamp")),
+                            seen=bool(status.get("seen")),
+                            done=bool(status.get("done")),
+                        )
+                    )
+
+        items.sort(
+            key=lambda item: (item.published is not None, item.published or datetime.min.replace(tzinfo=timezone.utc)),
+            reverse=True,
+        )
+        return items
 
     async def _api_login(self, credentials: AuthRequest) -> dict[str, Any]:
         institution_id = credentials.institution_id
@@ -1813,6 +1954,13 @@ class SeleniumSchulmanagerProvider:
                 text = self._opt_text(subject)
                 if text:
                     return text
+
+        # get-actual-lessons ships a human-friendly 'subjectLabel' on the (original) lesson.
+        for source in (actual, original, row):
+            if isinstance(source, dict):
+                label = self._opt_text(source.get("subjectLabel"))
+                if label:
+                    return label
 
         return self._as_text(row.get("subjectText") or "Unbekannt")
 

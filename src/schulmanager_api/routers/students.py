@@ -20,9 +20,11 @@ from schulmanager_api.models.schemas import (
     GradeStats,
     HomeworkDoneRequest,
     HomeworkItem,
+    LearningItem,
     LetterItem,
     MessageItem,
     MessageThread,
+    PaymentItem,
     Role,
     ScheduleDay,
     Student,
@@ -273,6 +275,40 @@ async def letters(
     return await _cached(
         cache, settings, key, settings.cache_ttl_messages_seconds, force_refresh,
         lambda: provider.get_letters(principal.context, student_id),
+    )
+
+
+@router.get("/{student_id}/payments", response_model=list[PaymentItem])
+async def payments(
+    student_id: str,
+    force_refresh: bool = False,
+    principal: AuthPrincipal = Depends(require_roles(*_READ_ROLES)),
+    provider: SchulmanagerProvider = Depends(get_provider),
+    cache: CacheBackend = Depends(get_cache_store),
+    settings: Settings = Depends(get_settings),
+) -> list[PaymentItem]:
+    """Zahlungen / invoices with paid status."""
+    key = _key(principal, student_id, "payments")
+    return await _cached(
+        cache, settings, key, settings.cache_ttl_exams_seconds, force_refresh,
+        lambda: provider.get_payments(principal.context, student_id),
+    )
+
+
+@router.get("/{student_id}/learning", response_model=list[LearningItem])
+async def learning(
+    student_id: str,
+    force_refresh: bool = False,
+    principal: AuthPrincipal = Depends(require_roles(*_READ_ROLES)),
+    provider: SchulmanagerProvider = Depends(get_provider),
+    cache: CacheBackend = Depends(get_cache_store),
+    settings: Settings = Depends(get_settings),
+) -> list[LearningItem]:
+    """Lernen / learning units (assignments & materials) with seen/done status."""
+    key = _key(principal, student_id, "learning")
+    return await _cached(
+        cache, settings, key, settings.cache_ttl_exams_seconds, force_refresh,
+        lambda: provider.get_learning(principal.context, student_id),
     )
 
 

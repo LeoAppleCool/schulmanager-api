@@ -18,8 +18,8 @@
 
 - **FastAPI-Backend** mit interaktiver Swagger-Dokumentation unter `/docs`
 - **JWT-Authentifizierung** (Access-Token, Refresh-Token, Token-Rotation, Rollen: `parent`, `viewer`, `admin`)
-- **Datenabruf pro Schüler**: Stundenplan, Hausaufgaben, Klausuren, Noten + Statistiken, Termine, Fehlzeiten, Nachrichten, ICS-Kalenderexport
-- **Provider-System**: `mock` (Testdaten ohne Schulmanager-Login) und `selenium` (echter Login-Flow via Browser-Automatisierung)
+- **Datenabruf pro Schüler**: Stundenplan, Hausaufgaben, Klausuren, Noten + Statistiken, Termine, Fehlzeiten, Nachrichten (Messenger), Elternbriefe, Zahlungen, Lernen, ICS-Kalenderexport
+- **Provider-System**: `mock` (Testdaten ohne Schulmanager-Login) und `selenium` (echter Login über die private `api/calls`-Schnittstelle via HTTP; Browser-Prüfung optional)
 - **Persistentes Caching** (SQLite oder In-Memory, konfigurierbares TTL pro Endpoint)
 - **Webhook-Subsystem** für Echtzeit-Benachrichtigungen bei Datenänderungen
 - **Rate-Limiting** (120 Req/min, konfigurierbar)
